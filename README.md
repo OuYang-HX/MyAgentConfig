@@ -50,32 +50,76 @@ components/
 
 例如 MCP 组件：`manifest.json` 写 `"kind": "mcp"` 和 `"hook": "install.sh"`，hook 里调用各客户端 CLI 完成注册；安装器负责发现、依赖检查、失败汇报和 dry-run。
 
-## 安装
+## 安装：**建链接，不复制**
+
+克隆之后**只做一件事**：把这些组件**软链接**到本机的 `~/.agents/skills/`（家目录下的 `.agents/skills`）。
+安装器**永不复制文件**——复制会让本机改动与仓库脱钩，之后想同步只能手工比对拷贝。
 
 ```bash
-git clone <你的仓库地址> ~/github/MyAgentConfig
+git clone git@github.com:OuYang-HX/MyAgentConfig.git ~/github/MyAgentConfig
 cd ~/github/MyAgentConfig
-./install.sh                 # macOS / Linux：装全部组件
+./install.sh                 # macOS / Linux：链接全部组件
+```
+
+```powershell
+git clone git@github.com:OuYang-HX/MyAgentConfig.git $env:USERPROFILE\github\MyAgentConfig
+cd $env:USERPROFILE\github\MyAgentConfig
+powershell -ExecutionPolicy Bypass -File .\install.ps1      # Windows
+```
+
+安装后的实际形态（`~/.agents/skills/` 里**全是链接**）：
+
+```text
+~/.agents/skills/
+├── git-worktree-flow -> ~/github/MyAgentConfig/components/gwf/skills/git-worktree-flow
+├── gwf-init          -> ~/github/MyAgentConfig/components/gwf/skills/gwf-init
+├── gwf-sync          -> ~/github/MyAgentConfig/components/gwf/skills/gwf-sync
+└── ...
+~/.local/bin/gwf      -> ~/github/MyAgentConfig/components/gwf/scripts/gwf
+```
+
+### 常用命令
+
+```bash
 ./install.sh --list          # 看有哪些组件
-./install.sh --only gwf      # 只装某个组件
+./install.sh --only gwf      # 只装/重装某个组件
+./install.sh --status        # 检查：是否都是链接？有没有被复制过？
 ./install.sh --dry-run       # 只打印计划，不落盘
 ./install.sh --uninstall     # 移除本仓库装过的链接（不动全局 git 配置）
 ```
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1              # Windows
-powershell -ExecutionPolicy Bypass -File .\install.ps1 --only gwf
-```
-
-安装器做的事（全部由 manifest 驱动）：
+### 安装器做的事（全部由 manifest 驱动）
 
 1. 扫描 `components/*/manifest.json`，检查依赖命令；
-2. 把每个技能目录链到 `~/.agents/skills/`（Windows 用 junction 兜底）；
-3. 链接命令入口到 `~/.local/bin`（Windows 到 `~/.gwf/bin` 并加入用户 PATH）；
+2. 把**每个技能目录链接**到 `~/.agents/skills/`（Windows 符号链接不可用时退化为**目录联接 junction**，仍是链接，不是复制）；
+3. **链接**命令入口到 `~/.local/bin`（Windows 在 `~/.gwf/bin` 生成指向仓库路径的 `gwf.cmd` 并加入用户 PATH）；
 4. 合并 `gitignore` 规则到全局 `core.excludesfile`、设置 `git_config`；
 5. 跑组件 `hook`（如有）、执行 `check` 自检、输出汇总。
 
-换机器重跑一次；仓库更新后 `git pull` 即可（符号链接指向仓库内容，自动生效）。
+### 日常同步工作流（这就是要链接而不是复制的原因）
+
+| 场景 | 做法 |
+| --- | --- |
+| 在任意机器上改技能 | **直接改仓库里的文件**（`components/**`）；`~/.agents/skills/` 里看到的就是同一份文件（链接），改完立即可用 |
+| 让其它机器生效 | 本机 `git commit && git push`；其它机器 `git pull` 即生效，**不用重装** |
+| 新增组件/技能目录 | 其它机器 `git pull` 后跑一次 `./install.sh`（新增目录需要新建链接） |
+| 换新机器 | `git clone` + `./install.sh` 一次搞定 |
+
+> 也可以直接编辑 `~/.agents/skills/gwf-sync/SKILL.md`：它解析后就是仓库里的文件，改完在仓库里提交即可。但**不要**在这些路径下用"另存/复制"的方式替换文件。
+
+### 排查
+
+```bash
+./install.sh --status       # 逐项报告：链接正常 / 未安装 / 是真实目录（复制安装）
+```
+
+- **提示"真实目录（复制安装）"**：说明之前是复制安装。删掉目标目录再重装即可：
+  ```bash
+  rm -rf ~/.agents/skills/gwf-sync      # 只删这一个
+  cd ~/github/MyAgentConfig && ./install.sh
+  ```
+- **Windows 建链接失败**：打开「设置 → 开发者模式」（或管理员运行 PowerShell）后重跑；安装器会优先用符号链接，失败自动退化为目录联接。
+- **路径换了**（仓库搬家）：重新跑 `./install.sh` 重建全部链接。
 
 ## 现有组件
 

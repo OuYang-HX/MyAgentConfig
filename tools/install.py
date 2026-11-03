@@ -126,12 +126,19 @@ def check_requires(manifest):
 # ------------------------------------------------------------------ 动作
 
 def link_dir(src, dst, dry):
-    """把 src 目录链到 dst。已存在的符号链接会被替换；真实目录不会被破坏。"""
+    """把 src 目录【链接】到 dst。
+
+    安装一律是链接，绝不复制：复制会导致本机改动与仓库脱钩，
+    多机器同步只能靠手工拷贝。已存在的符号链接会被替换；
+    真实目录不会被覆盖（提示用户自行清理后再装）。
+    """
     if dst.is_symlink() or dst.is_file():
         if not dry:
             dst.unlink()
     elif dst.exists():
-        warn("%s 是真实目录，跳过（避免覆盖你的文件）" % dst)
+        warn("%s 已存在且是真实目录（可能是早期复制安装）" % dst)
+        warn("未覆盖。请先删除它再重装，否则本机改动不会随仓库更新：")
+        warn("    rm -rf \"%s\"" % dst)
         return False
     if dry:
         info("link %s -> %s" % (dst, src))
@@ -141,12 +148,15 @@ def link_dir(src, dst, dry):
         os.symlink(str(src), str(dst), target_is_directory=True)
     except OSError as e:
         if IS_WINDOWS:
+            # 符号链接需要开发者模式；退化为目录联接（junction）——它同样是链接，不是复制
             rc, _, errtxt = run(["cmd", "/c", "mklink", "/J", str(dst), str(src)])
             if rc == 0:
+                info("%s: 符号链接不可用，已退化为目录联接（仍是链接，改动可随仓库同步）" % dst.name)
                 return True
-            warn("Windows 目录链接失败(%s)：请开启开发者模式或以管理员运行，或手动复制" % errtxt)
-        else:
-            warn("创建链接失败 %s: %s" % (dst, e))
+            err("Windows 建链接失败: %s" % (errtxt or e))
+            err("请在「设置 → 开发者模式」开启后重试，或以管理员身份运行")
+            return False
+        warn("创建链接失败 %s: %s（安装必须是链接，不会复制）" % (dst, e))
         return False
     return True
 
@@ -307,6 +317,68 @@ def verify(manifest, bin_dst):
         warn("%s 校验失败" % name)
 
 
+def link_state(dst, repo):
+    """返回 (状态, 说明)。状态: ok / missing / copy / other。"""
+    if dst.is_symlink():
+        try:
+            target = os.path.realpath(str(dst))
+        except OSError:
+            return "other", "符号链接无法解析"
+        if target.startswith(os.path.realpath(repo)):
+            return "ok", target
+        return "other", "链接指向仓库外: %s" % target
+    if dst.exists():
+        return "copy", "真实目录/文件（不是链接，改动不会随仓库同步）"
+    return "missing", "未安装"
+
+
+def print_status(comps, skills_dst, bin_dst):
+    problems = 0
+    print()
+    print("== 安装状态（应为链接，不应该是复制）==")
+    for name, comp_dir, manifest in comps:
+        if manifest.get("_error"):
+            print("%s: manifest 解析失败" % name)
+            problems += 1
+            continue
+        print()
+        print("组件 %s (%s)" % (name, manifest.get("display", "")))
+        rel = (manifest.get("skills") or {}).get("dir")
+        if rel:
+            src_dir = comp_dir / rel
+            entries = sorted([d for d in src_dir.iterdir()
+                              if d.is_dir() and (d / "SKILL.md").exists()]) if src_dir.is_dir() else []
+            for skill in entries:
+                state, note = link_state(skills_dst / skill.name, REPO)
+                if state == "ok":
+                    ok("技能 %-22s 链接正常" % skill.name)
+                elif state == "missing":
+                    problems += 1
+                    warn("技能 %-22s %s" % (skill.name, note))
+                else:
+                    problems += 1
+                    err("技能 %-22s %s" % (skill.name, note))
+            if not entries:
+                warn("组件下没有找到技能")
+        for entry in manifest.get("bin", []):
+            bname = entry.get("name")
+            target = bin_dst / (bname + (".cmd" if IS_WINDOWS else ""))
+            state, note = link_state(target, REPO)
+            if state == "ok":
+                ok("命令 %-22s 链接正常" % bname)
+            elif state == "missing":
+                warn("命令 %-22s 未安装（%s）" % (bname, target))
+            else:
+                problems += 1
+                err("命令 %-22s %s" % (bname, note))
+    print()
+    if problems:
+        print("待处理 %d 项：重新执行 ./install.sh 即可修复（如遇复制安装，先按提示删掉目标目录）" % problems)
+    else:
+        print("全部为链接，改动会随仓库同步 ✔")
+    return 1 if problems else 0
+
+
 def uninstall(skills_dst, bin_dst, dry):
     removed = 0
     repo = str(REPO)
@@ -332,6 +404,7 @@ def uninstall(skills_dst, bin_dst, dry):
 def main():
     ap = argparse.ArgumentParser(description="MyAgentConfig 通用组件安装器")
     ap.add_argument("--list", action="store_true", help="列出组件")
+    ap.add_argument("--status", action="store_true", help="检查安装状态（链接是否正常/是否被复制）")
     ap.add_argument("--only", default="", help="只安装指定组件（逗号分隔）")
     ap.add_argument("--dry-run", action="store_true", help="只打印计划")
     ap.add_argument("--uninstall", action="store_true", help="移除本仓库安装的链接")
@@ -357,6 +430,9 @@ def main():
                 say("                %s" % m["description"])
         say("")
         return 0
+
+    if args.status:
+        return print_status(comps, skills_dst, bin_dst)
 
     if args.uninstall:
         head("卸载")

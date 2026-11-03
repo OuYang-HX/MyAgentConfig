@@ -42,14 +42,18 @@ components/gwf/
 | 同步官方代码 | `gwf-sync` | `gwf sync --all` |
 | 合入归档 | `gwf-archive` | `gwf archive <dir> --merge` |
 
-## 安装
+## 安装（链接，不复制）
 
 由仓库根安装器统一处理，组件本身不需要单独安装脚本：
 
 ```bash
 ./install.sh --only gwf        # 只装这一个组件
 ./install.sh --list            # 看仓库里有哪些组件
+./install.sh --status          # 检查是否都是链接（不是复制）
 ```
+
+安装后 `~/.agents/skills/gwf-*` 与 `~/.local/bin/gwf` 都是**指向本仓库的链接**：
+改仓库文件立即生效，`git pull` 后各机器自动同步，无需重装。
 
 ## 设计参考
 
