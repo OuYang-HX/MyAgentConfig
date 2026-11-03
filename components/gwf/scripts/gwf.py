@@ -32,7 +32,7 @@ from pathlib import Path
 
 CONFIG_FILE = ".gwf.json"
 DOC_FILE = "worktree.md"
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -258,6 +258,18 @@ def pick_main_worktree(root, wts, cfg):
     return wts[0] if wts else None
 
 
+def detect_patch_tags(cwd):
+    """从最近提交里自动识别自定义提交前缀，如 [oyhx]。"""
+    res = run(["log", "--pretty=%s", "-n", "200"], cwd=cwd)
+    counts = {}
+    for line in res.get("out", "").splitlines():
+        m = re.match(r"^\[([^\]]{1,16})\]\s", line.strip())
+        if m:
+            counts["[" + m.group(1) + "]"] = counts.get("[" + m.group(1) + "]", 0) + 1
+    top = [t for t, _ in sorted(counts.items(), key=lambda kv: -kv[1])][:3]
+    return top or ["[fork]", "[me]", "[custom]"]
+
+
 def detect_config(root, wts=None):
     wts = wts if wts is not None else list_worktrees(cwd=root)
     main = pick_main_worktree(root, wts, None)
@@ -277,6 +289,19 @@ def detect_config(root, wts=None):
         origin = ""
 
     main_branch = main["branch"] if main and main["branch"] else "main"
+
+    def upstream_default_branch():
+        if not upstream:
+            return main_branch
+        head = run(["symbolic-ref", "refs/remotes/%s/HEAD" % upstream]).get("out", "")
+        if head:
+            return head.split("refs/remotes/%s/" % upstream)[-1]
+        for cand in ("main", "master"):
+            if git_ok(["rev-parse", "--verify", "--quiet", "refs/remotes/%s/%s" % (upstream, cand)]):
+                return cand
+        return main_branch
+
+    up_branch = upstream_default_branch()
     eco = ecosystem_for(main["path"]) if main else None
 
     return {
@@ -285,8 +310,8 @@ def detect_config(root, wts=None):
         "main_worktree": main["path"].name if main else "main",
         "upstream_remote": upstream,
         "origin_remote": origin,
-        "upstream_ref": ("%s/%s" % (upstream, main_branch)) if upstream else main_branch,
-        "patch_tags": ["[fork]", "[me]", "[custom]"],
+        "upstream_ref": ("%s/%s" % (upstream, up_branch)) if upstream else main_branch,
+        "patch_tags": detect_patch_tags(main["path"]) if main else ["[fork]", "[me]", "[custom]"],
         "verify": {
             "check": eco["check"] if eco else "",
             "test": eco["test"] if eco else "",
@@ -501,6 +526,9 @@ def cmd_new(args):
     main = pick_main_worktree(root, wts, cfg)
     if not main:
         die("找不到主干工作树")
+    if is_flat_layout(root, wts) and not getattr(args, "force", False):
+        die("当前是扁平仓库（根目录即工作区），先在需求隔离上开工作树会打架。\n"
+            "  迁移步骤见 gwf doctor 的输出，或加 --force 强制继续。")
 
     name = args.name.strip()
     folder = name if re.match(r"^(feat|fix|chore|refactor|perf)-", name) else "feat-" + slugify(name)
@@ -569,8 +597,8 @@ def cmd_new(args):
 
 # ---------------------------------------------------------------- status / scan
 
-def feature_rows(root, wts, cfg):
-    base = cfg.get("main_branch", "main")
+def feature_rows(root, wts, cfg, base=None):
+    base = base or cfg.get("main_branch", "main")
     rows = []
     for w in wts:
         ahead = run(["rev-list", "--count", "%s..HEAD" % base], cwd=w["path"]).get("out", "?")
@@ -591,8 +619,11 @@ def feature_rows(root, wts, cfg):
 def cmd_status(args):
     root = project_root()
     cfg = get_config(root)
-    rows = feature_rows(root, list_worktrees(), cfg)
+    wts = list_worktrees()
     upstream = cfg.get("upstream_ref", "")
+    flat = is_flat_layout(root, wts)
+    base = upstream if (flat and upstream) else cfg.get("main_branch", "main")
+    rows = feature_rows(root, wts, cfg, base)
 
     print("")
     print("项目根: %s" % root)
@@ -826,8 +857,10 @@ def cmd_sync(args):
 
     if not args.skip_fetch and up and cfg.get("upstream_remote"):
         say("拉取官方 %s ..." % up)
+        # 官方分支名取 upstream_ref 的后半段（扁平仓库里本地主干名可能与官方不同）
+        up_branch = up.split("/", 1)[1] if "/" in up else base
         res = run(["fetch", "--no-tags", cfg["upstream_remote"],
-                   "+refs/heads/%s:refs/remotes/%s" % (base, up)])
+                   "+refs/heads/%s:refs/remotes/%s" % (up_branch, up)])
         if res["code"] != 0:
             warn("fetch 失败（无网络或无该远端）: %s" % (res["err"] or res["out"])[:160])
         elif not onto_upstream:
@@ -1084,6 +1117,7 @@ def build_parser():
     sp = sub.add_parser("new", help="开新需求：建 worktree + 生成 worktree.md")
     sp.add_argument("name", help="需求名（如 login 或 feat-login）")
     sp.add_argument("desc", nargs="?", default="", help="一句话目标")
+    sp.add_argument("--force", action="store_true", help="扁平仓库下仍强制创建（不推荐）")
     sp.set_defaults(func=cmd_new)
 
     sub.add_parser("status", help="工作树状态总览").set_defaults(func=cmd_status)
