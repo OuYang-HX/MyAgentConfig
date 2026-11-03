@@ -2,7 +2,7 @@
 
 > **GWF = Git WorkTree Flow**。`gwf` 是这条工作流的命令行引擎。
 
-一个**技能集合**组件：把"纯 worktree 多需求并行开发"和"fork 上游同步治理"拆成 6 个可一句话触发的技能 + 1 个跨平台引擎。
+一个**技能集合**组件：把"纯 worktree 多需求并行开发"、"fork 上游同步治理"和"定制产物发版交付"拆成 7 个可一句话触发的技能 + 1 个跨平台引擎。
 
 ## 组件内结构
 
@@ -41,6 +41,7 @@ components/gwf/
 | 看状态 / 查冲突 | `gwf-scan` | `gwf status` / `gwf scan` |
 | 同步官方代码 | `gwf-sync` | `gwf sync --all` |
 | 合入归档 | `gwf-archive` | `gwf archive <dir> --merge` |
+| 发版交付 | `gwf-release` | 版本→打包→产物→交付→装机→推送 |
 
 ## 安装（链接，不复制）
 

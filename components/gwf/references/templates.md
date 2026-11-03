@@ -54,7 +54,16 @@
     "build": "cargo build"
   },
   "ecosystem": "rust",
-  "lockfiles": ["Cargo.lock"]
+  "lockfiles": ["Cargo.lock"],
+  "release": {
+    "version_source": "package.json#version",
+    "build_number_source": "app.json#android.versionCode",
+    "build_label": "me",
+    "package": "pnpm build",
+    "artifact_glob": "dist/*.zip",
+    "install": "",
+    "deliver_dir": "~/Desktop"
+  }
 }
 ```
 
@@ -67,6 +76,7 @@
 | `verify` | 验证命令 | 探测不准（多模块、用 make 包装、需要容器） |
 | `lockfiles` | 锁文件清单 | 用了 conan/vcpkg/uv 等非默认方案 |
 | `patch_tags` | 自定义提交前缀 | 有自己的提交规范 |
+| `release` | 发版打包/交付信息 | 需要定制产物交付时（见 `release.md`） |
 
 放在项目根（`.git/` 同级），**不在任何工作树内**，所以不会被 git 跟踪，也不会污染 `git diff upstream/main..HEAD` 的单调递减统计。
 

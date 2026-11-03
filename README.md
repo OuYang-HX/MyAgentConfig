@@ -19,7 +19,7 @@ MyAgentConfig/
 │       ├── scripts/             # gwf 引擎
 │       └── skills/              # 本组技能（每个子目录含 SKILL.md）
 │           ├── git-worktree-flow/
-│           ├── gwf-init/ gwf-new/ gwf-scan/ gwf-sync/ gwf-archive/
+│           ├── gwf-init/ gwf-new/ gwf-scan/ gwf-sync/ gwf-archive/ gwf-release/
 └── README.md
 ```
 
@@ -125,7 +125,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1      # Windows
 
 | 组件 | 说明 |
 | --- | --- |
-| [`gwf`](components/gwf/README.md) | **GWF = Git WorkTree Flow**：纯 worktree 多需求并行开发 + fork 上游同步治理。6 个一句话技能 + `gwf` 命令 |
+| [`gwf`](components/gwf/README.md) | **GWF = Git WorkTree Flow**：纯 worktree 多需求并行开发 + fork 上游同步治理 + 定制产物发版交付。7 个一句话技能 + `gwf` 命令 |
 
 ### gwf 一句话速查
 
@@ -136,6 +136,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1      # Windows
 | 看状态 / 查冲突 | "看下各分支会不会撞车" | `gwf status` / `gwf scan` |
 | 同步官方代码 | "同步官方" | `gwf sync --all` |
 | 合入并清理 | "这个需求做完了，合入并清理" | `gwf archive feat-login --merge` |
+| 发版交付 | "打一版交付" | 按 `gwf-release`：版本→打包→产物+sha256→交付→装机→`--force-with-lease` |
 
 用户不需要补充"更新条件/更新要求"——审计顺序、裁决矩阵、清理清单、验证阶梯、单调递减验收都在技能正文里。
 

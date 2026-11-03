@@ -22,6 +22,12 @@ gwf sync --all --rebase-main # 主干也有下游提交时，把主干一起变�
 
 ## 它替你做的决定（所以不用你说条件）
 
+0. **先备份**：同步前建一条带日期的备份分支并推到个人仓，出事可一键回滚：
+   ```bash
+   git -C main status --porcelain=v1 -b        # 必须干净
+   git -C main branch backup/<branch>-<YYYYMMDD> <sha>
+   git -C main push origin backup/<branch>-<YYYYMMDD>
+   ```
 1. **只取命名引用**：`git fetch --no-tags upstream +refs/heads/<main>:refs/remotes/upstream/<main>`（不用 `fetch --all`，避免个人分支混进官方命名空间）。
 2. **主干优先快进**：`merge --ff-only upstream/main`；主干有下游提交无法快进时**只警告不擅自变基**（要不要动主干是另一件事，得显式 `--rebase-main`）。
 3. **同步前审计**（这是关键，冲突不是随机出现的）：
@@ -93,6 +99,10 @@ git rebase --abort             # 完全放弃本次同步，回到同步前
 - [ ] 验证命令 exit 0（`gwf sync --verify` 或手动跑 `.gwf.json` 的 `verify`）
 - [ ] `worktree.md` 第 3 节补一行：本轮哪条增量被官方覆盖、何时删除
 - [ ] 台账更新：上游基线 SHA、本轮删了哪些补丁、剩余增量多少
+
+## 同步之后要发版？
+
+产物重建、版本/构建号、产物命名与 sha256、装机核对、`--force-with-lease` 推送，全部交给 `gwf-release`。
 
 ## 报告模板
 

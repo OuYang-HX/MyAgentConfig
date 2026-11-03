@@ -26,6 +26,7 @@ description: Git 纯 Worktree 多需求并行开发与 fork 上游同步的"技�
 | "现在什么状态/落后多少/会不会冲突/先合谁" | `gwf-scan` | `gwf status` / `gwf scan` |
 | "同步官方/更新 upstream/拉上游最新/官方发版了/rebase 到最新" | `gwf-sync` | `gwf sync --all` |
 | "合入主干/收尾/清理 worktree/这个需求做完了" | `gwf-archive` | `gwf archive <目录> --merge` |
+| "打包/发版/出包/构建号/交付/装机/推到远端" | `gwf-release` | 按 `gwf-release` 流程（版本→打包→产物→交付→装机→推送） |
 
 ## 共用铁律（每个原子技能都遵守，此处只列，细则见 references）
 
@@ -44,7 +45,8 @@ description: Git 纯 Worktree 多需求并行开发与 fork 上游同步的"技�
 - `../../references/layout.md` — 纯 worktree 布局、初始化、旧仓迁移、跨平台差异
 - `../../references/arbitration.md` — 上游覆盖裁决矩阵、死资产清理、锁文件纪律、DEP-3 标签
 - `../../references/verification.md` — 跨语言验证阶梯（C++/Java/Rust/Go/Python/Node）与门禁纪律
-- `../../references/templates.md` — `worktree.md` 模板、`.gwf.json` 字段说明
+- `../../references/release.md` — 版本策略、构建号、产物命名、latest 清单、装机与推送纪律
+- `../../references/templates.md` — `worktree.md` 模板、`.gwf.json` 字段说明（含 `release` 段）
 
 ## 没有 CLI 时
 
