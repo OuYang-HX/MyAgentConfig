@@ -32,7 +32,7 @@ from pathlib import Path
 
 CONFIG_FILE = ".gwf.json"
 DOC_FILE = "worktree.md"
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 
 # ---------------------------------------------------------------- 基础工具
