@@ -32,7 +32,7 @@ from pathlib import Path
 
 CONFIG_FILE = ".gwf.json"
 DOC_FILE = "worktree.md"
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -359,6 +359,79 @@ def now_str():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
+def stamp_str():
+    import datetime
+    return datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def repo_cwd(root):
+    """能执行分支类命令的工作目录：优先主干工作树，扁平仓库用根目录。"""
+    try:
+        wts = list_worktrees(cwd=root)
+    except SystemExit:
+        return root
+    cfg = load_config(root) or {}
+    base = cfg.get("main_branch", "")
+    for w in wts:
+        if w["branch"] == base:
+            return w["path"]
+    return wts[0]["path"] if wts else root
+
+
+def make_backup(path, cfg, args):
+    """同步前把当前 HEAD 备份成 backup/<branch>-<时间戳> 分支。"""
+    if getattr(args, "no_backup", False):
+        say("--no-backup：跳过备份分支")
+        return ""
+    branch = run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path).get("out", "")
+    if not branch or branch == "HEAD":
+        warn("detached HEAD，跳过备份")
+        return ""
+    name = "backup/%s-%s" % (branch.replace("/", "-"), stamp_str())
+    res = run(["branch", name, "HEAD"], cwd=path)
+    if res["code"] != 0:
+        warn("创建备份分支失败: %s" % (res["err"] or res["out"])[:160])
+        return ""
+    sha = run(["rev-parse", "--short", "HEAD"], cwd=path).get("out", "")
+    say("已备份 %s (%s) -> 分支 %s" % (branch, sha, name))
+    if getattr(args, "backup_push", False) or cfg.get("backup_push"):
+        remote = cfg.get("origin_remote") or "origin"
+        rc = run(["push", "-q", remote, "%s:refs/heads/%s" % (name, name)], cwd=path)
+        if rc["code"] == 0:
+            say("备份分支已推送 %s" % remote)
+        else:
+            warn("备份分支推送失败（本地备份仍在）: %s" % (rc["err"] or rc["out"])[:120])
+    return name
+
+
+def rebase_in_progress(root):
+    """返回处于 rebase 中的工作树名；没有则返回空串。"""
+    try:
+        wts = list_worktrees(cwd=root)
+    except SystemExit:
+        return ""
+    for w in wts:
+        gd = run(["rev-parse", "--git-dir"], cwd=w["path"]).get("out", "")
+        if not gd:
+            continue
+        gdp = Path(gd) if Path(gd).is_absolute() else Path(w["path"]) / gd
+        for sub in ("rebase-merge", "rebase-apply"):
+            if (gdp / sub).exists():
+                return w["path"].name
+    return ""
+
+
+def list_backup_branches(cwd):
+    res = run(["for-each-ref", "--format=%(refname:short)|%(objectname:short)|%(committerdate:short)",
+               "refs/heads/backup/"], cwd=cwd)
+    rows = []
+    for line in res.get("out", "").splitlines():
+        parts = line.split("|")
+        if len(parts) >= 3:
+            rows.append({"name": parts[0], "sha": parts[1], "date": parts[2]})
+    return rows
+
+
 # ---------------------------------------------------------------- init
 
 def cmd_init(args):
@@ -655,6 +728,10 @@ def sync_one(root, cfg, target, args, base):
         say("--dry-run：仅审计，未执行 rebase")
         return "dry"
 
+    backup = make_backup(path, cfg, args)
+    if backup:
+        args.backups = getattr(args, "backups", []) + ["%s:%s" % (backup, path.name)]
+
     say("rebase 到 %s ..." % base)
     res = run(["rebase", "--empty=drop", base], cwd=path)
     if res["code"] != 0:
@@ -673,6 +750,8 @@ def sync_one(root, cfg, target, args, base):
         print("   4) 锁文件(%s) -> git checkout --theirs <lock> 后由项目工具重新生成"
               % (", ".join(cfg.get("lockfiles") or []) or "按项目"))
         print("  解决后: git add -A && git rebase --continue  /  放弃: git rebase --abort")
+        if backup:
+            print("  回滚到同步前: git reset --hard %s" % backup)
         return "conflict"
 
     dropped = [l for l in (res["out"] + "\n" + res["err"]).splitlines()
@@ -699,6 +778,13 @@ def sync_one(root, cfg, target, args, base):
         warn("增量变大，违反单调递减：检查是否重复实现了上游已有能力")
     else:
         say("单调递减通过 (%d->%d 文件, %d->%d 行)" % (before[0], after[0], before[1], after[1]))
+
+    if backup:
+        print("")
+        say("备份分支: %s" % backup)
+        print("  核对功能是否丢失: gwf backup show %s" % backup)
+        print("  确认无误后删除:   gwf backup clean %s" % backup)
+        print("  发现问题回滚:     git reset --hard %s" % backup)
 
     if args.verify:
         verify = cfg.get("verify", {}) or {}
@@ -856,6 +942,81 @@ def cmd_archive(args):
 
 # ---------------------------------------------------------------- config / doctor
 
+def cmd_backup(args):
+    root = project_root()
+    cfg = get_config(root)
+    cwd = repo_cwd(root)
+    action = args.action or "list"
+
+    if action == "list":
+        rows = list_backup_branches(cwd)
+        print("")
+        if not rows:
+            say("没有备份分支")
+            return
+        say("备份分支（同步前自动创建）:")
+        for r in rows:
+            ahead = run(["rev-list", "--count", "HEAD..%s" % r["name"]], cwd=cwd).get("out", "?")
+            print("  %-46s %-10s %-12s 相对当前多出 %s 个提交" % (r["name"], r["sha"], r["date"], ahead))
+        print("")
+        say("核对: gwf backup show <分支名>    删除: gwf backup clean <分支名> | --all")
+        return
+
+    if action == "show":
+        if not args.names:
+            die("用法: gwf backup show <备份分支名>")
+        name = args.names[0]
+        if not name.startswith("backup/"):
+            name = "backup/" + name
+        if not git_ok(["rev-parse", "--verify", "--quiet", "refs/heads/%s" % name], cwd=cwd):
+            die("备份分支不存在: %s" % name)
+        print("")
+        say("备份 %s 相对当前 HEAD 的差异（HEAD..备份 = 被丢弃/被改写的提交）" % name)
+        commits = run(["log", "--oneline", "HEAD..%s" % name], cwd=cwd).get("out", "")
+        print(commits if commits else "  (无提交差异：当前分支已包含备份内容)")
+        diff = run(["diff", "--stat", "HEAD..%s" % name], cwd=cwd).get("out", "")
+        if diff:
+            print("")
+            print("  文件差异：")
+            for line in diff.splitlines():
+                print("    " + line)
+        print("")
+        say("确认功能未丢失后：gwf backup clean %s" % name)
+        say("发现问题回滚：  git reset --hard %s" % name)
+        return
+
+    if action == "clean":
+        busy = rebase_in_progress(root)
+        if busy:
+            die("工作树 %s 仍处于 rebase 中：先解决冲突（git rebase --continue）或回滚（git rebase --abort），再清理备份" % busy)
+        names = list(args.names)
+        if args.all:
+            names = [r["name"] for r in list_backup_branches(cwd)]
+        if not names:
+            die("用法: gwf backup clean <备份分支...> | --all")
+        for n in names:
+            if not n.startswith("backup/"):
+                die("只允许删除 backup/ 前缀的分支: %s" % n)
+            if not git_ok(["rev-parse", "--verify", "--quiet", "refs/heads/%s" % n], cwd=cwd):
+                warn("不存在，跳过: %s" % n)
+                continue
+            ahead = run(["rev-list", "--count", "HEAD..%s" % n], cwd=cwd).get("out", "0")
+            if ahead not in ("0", ""):
+                warn("%s 相对当前多出 %s 个提交（确认这些提交确实不需要了）" % (n, ahead))
+            res = run(["branch", "-D", n], cwd=cwd)
+            if res["code"] != 0:
+                warn("删除失败: %s" % (res["err"] or res["out"]).strip())
+                continue
+            if args.remote and cfg.get("origin_remote"):
+                rc = run(["push", cfg["origin_remote"], "--delete", n], cwd=cwd)
+                if rc["code"] != 0:
+                    warn("远端删除失败: %s" % (rc["err"] or rc["out"])[:120])
+            say("已删除备份分支 %s" % n)
+        return
+
+    die("未知动作: %s（可选 list / show / clean）" % action)
+
+
 def cmd_config(args):
     root = project_root()
     cfg = load_config(root)
@@ -935,6 +1096,8 @@ def build_parser():
     sp.add_argument("--verify", action="store_true", help="同步后执行 .gwf.json 里的验证命令")
     sp.add_argument("--rebase-main", action="store_true", help="主干无法快进时把主干也变基到官方")
     sp.add_argument("--skip-fetch", action="store_true", help="不联网，只用已有引用")
+    sp.add_argument("--no-backup", action="store_true", help="同步前不创建备份分支（不推荐）")
+    sp.add_argument("--backup-push", action="store_true", help="把备份分支推到个人远端")
     sp.add_argument("--upstream", action="store_true",
                     help="目标分支直接变基到官方引用（扁平仓库/单分支 fork 用；扁平布局默认启用）")
     sp.set_defaults(func=cmd_sync)
@@ -946,6 +1109,13 @@ def build_parser():
     sp.add_argument("--keep-branch", action="store_true", help="保留分支")
     sp.add_argument("--force", action="store_true", help="忽略未提交改动/强制删除")
     sp.set_defaults(func=cmd_archive)
+
+    sp = sub.add_parser("backup", help="查看/核对/清理同步前自动创建的备份分支")
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "show", "clean"])
+    sp.add_argument("names", nargs="*")
+    sp.add_argument("--all", action="store_true", help="clean 时删除全部 backup/* 分支")
+    sp.add_argument("--remote", action="store_true", help="clean 时同时删除远端备份分支")
+    sp.set_defaults(func=cmd_backup)
 
     sp = sub.add_parser("config", help="查看/生成项目配置 .gwf.json")
     sp.add_argument("action", nargs="?", default="show", choices=["show", "init"])

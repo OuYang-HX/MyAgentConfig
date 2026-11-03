@@ -17,6 +17,8 @@ gwf sync --all --dry-run     # 只看审计报告，不动手（有风险时先�
 gwf sync --all --verify      # 同步后顺带跑 .gwf.json 里的 check/test
 gwf sync --all --rebase-main # 主干也有下游提交时，把主干一起变基到官方
 gwf sync --upstream          # 目标分支直接变基到官方（单分支 fork / 不想经 main 中转）
+gwf sync --no-backup         # 不建备份（不推荐；仅在确定无自定义提交时用）
+gwf sync --backup-push       # 备份分支同时推到个人远端
 ```
 
 退出码：`0` 全部完成；`2` 有工作树停在冲突中待裁决。
@@ -33,12 +35,9 @@ gwf sync --upstream          # 目标分支直接变基到官方（单分支 for
 
 ## 它替你做的决定（所以不用你说条件）
 
-0. **先备份**：同步前建一条带日期的备份分支并推到个人仓，出事可一键回滚：
-   ```bash
-   git -C main status --porcelain=v1 -b        # 必须干净
-   git -C main branch backup/<branch>-<YYYYMMDD> <sha>
-   git -C main push origin backup/<branch>-<YYYYMMDD>
-   ```
+0. **自动备份**：每次 rebase 前给目标分支建 `backup/<分支>-<时间戳>` 分支（默认本地；加
+   `--backup-push` 或 `.gwf.json` 的 `backup_push: true` 同时推个人远端）。
+   rebase 丢提交后不会"想不起来做过什么"——备份里有完整历史。
 1. **只取命名引用**：`git fetch --no-tags upstream +refs/heads/<main>:refs/remotes/upstream/<main>`（不用 `fetch --all`，避免个人分支混进官方命名空间）。
 2. **主干优先快进**：`merge --ff-only upstream/main`；主干有下游提交无法快进时**只警告不擅自变基**（要不要动主干是另一件事，得显式 `--rebase-main`）。
 3. **同步前审计**（这是关键，冲突不是随机出现的）：
@@ -111,6 +110,27 @@ git rebase --abort             # 完全放弃本次同步，回到同步前
 - [ ] 验证命令 exit 0（`gwf sync --verify` 或手动跑 `.gwf.json` 的 `verify`）
 - [ ] `worktree.md` 第 3 节补一行：本轮哪条增量被官方覆盖、何时删除
 - [ ] 台账更新：上游基线 SHA、本轮删了哪些补丁、剩余增量多少
+
+## 备份 → 核对 → 清理（丢过提交的操作必须走完）
+
+`gwf sync` 自动创建备份，输出里会给出三条命令：
+
+```bash
+gwf backup list                 # 有哪些备份、各比当前多几个提交
+gwf backup show backup/feat-x-20261104-0239   # 看被丢弃/被改写的提交与文件差异
+git reset --hard backup/feat-x-20261104-0239  # 发现问题：回滚到同步前
+gwf backup clean backup/feat-x-20261104-0239  # 确认功能未丢失后：删除备份
+gwf backup clean --all          # 清理全部（有 rebase 未完成时会拒绝）
+```
+
+核对时必须逐条回答：
+
+- [ ] 被丢弃的提交，每一项在官方实现里都能找到等价能力（给判据，不靠印象）
+- [ ] 被改写（rebase 后 SHA 变化）的提交，补丁内容仍在 `git diff <main>..HEAD`
+- [ ] 本需求/本分支**原有功能**逐一实测通过（不只是测试绿）
+- [ ] `gwf backup show` 里除"已被官方覆盖"外没有意外丢失的改动
+
+全部确认后才执行 `gwf backup clean`；没确认就留着，备份分支不占空间也不影响合入。
 
 ## 收尾四问（每次同步都要能答）
 

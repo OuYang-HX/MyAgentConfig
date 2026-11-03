@@ -2,7 +2,7 @@
   "name": "gwf",
   "display": "Git WorkTree Flow",
   "description": "纯 Worktree 多需求并行开发 + fork 上游同步的技能集合（6 个技能 + gwf 命令行引擎）",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "kind": "skills",
   "skills": {
     "dir": "skills"

@@ -26,17 +26,20 @@ description: Git 纯 Worktree 多需求并行开发与 fork 上游同步的"技�
 | "现在什么状态/落后多少/会不会冲突/先合谁" | `gwf-scan` | `gwf status` / `gwf scan` |
 | "同步官方/更新 upstream/拉上游最新/官方发版了/rebase 到最新/更新官方代码到我的 fork 分支" | `gwf-sync` | `gwf sync --all`（扁平仓库直接 `gwf sync`） |
 | "合入主干/收尾/清理 worktree/这个需求做完了" | `gwf-archive` | `gwf archive <目录> --merge` |
+| "回滚/恢复/删备份分支/我当时改了什么" | `gwf-sync`（备份子命令） | `gwf backup list/show/clean` |
 | "打包/发版/出包/构建号/交付/装机/推到远端" | `gwf-release` | 按 `gwf-release` 流程（版本→打包→产物→交付→装机→推送） |
 
 ## 共用铁律（每个原子技能都遵守，此处只列，细则见 references）
 
 1. **官方优先**：上游实现了同一功能 → 删掉自定义实现，两套并存是最大技术债。
 2. **单调递减**：每次同步后 `git diff --stat <main>..HEAD` 的文件数/行数不得变大。
-3. **重写而非拼贴**：上游结构变了，就以新结构为基底重写，不留死路径。
-4. **`worktree.md` 不进 git**：靠全局 `core.excludesfile` 排除。
-5. **根目录无代码**：只允许 `.git/`、`.gwf.json` 和各分支目录。
-6. **不擅自动门禁**：类型错误/lint/测试按仓库规则改代码，不加 disable、不改阈值。
-7. **脏工作树先问**：有未提交改动时先提交或 stash，绝不 reset 丢弃。
+3. **先备份、后核对、再清理**：任何可能丢提交的操作（同步/变基）前自动建 `backup/*` 分支；
+   确认原有功能没丢之后再删，绝不凭记忆判断。
+4. **重写而非拼贴**：上游结构变了，就以新结构为基底重写，不留死路径。
+5. **`worktree.md` 不进 git**：靠全局 `core.excludesfile` 排除。
+6. **根目录无代码**：只允许 `.git/`、`.gwf.json` 和各分支目录。
+7. **不擅自动门禁**：类型错误/lint/测试按仓库规则改代码，不加 disable、不改阈值。
+8. **脏工作树先问**：有未提交改动时先提交或 stash，绝不 reset 丢弃。
 
 ## references（细则，按需读取）
 
