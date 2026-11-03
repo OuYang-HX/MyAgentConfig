@@ -2,6 +2,18 @@
 
 一句话：**官方实现了 → 删我们的；官方没实现 → 按官方新结构重写；两边无关 → 都留。**
 
+## 台账放哪里（两种粒度）
+
+| 场景 | 位置 | 是否入库 |
+| --- | --- | --- |
+| 一次性需求/短期特性 | 各 worktree 的 `worktree.md` | 否（全局 gitignore 排除） |
+| **长期维护的 fork 分支** | 仓库根 `FORK_MAINTENANCE.md`（或 `docs/<名字>.md`，注意仓库自身 ignore 规则） | **是**，随分支跨机器同步 |
+
+长期 fork 的台账必须入库，否则换机器就丢；里面只放项目事实（远端约定、功能表与判据、
+版本/构建号策略、关键教训），方法论留在技能里。
+
+> 示例：orca 定制分支用 `FORK_MAINTENANCE.md` 替代了原来的 `.zcode/skills/port-custom-commits/SKILL.md`。
+
 ## 补丁分类（借鉴 Debian DEP-3）
 
 给每个自定义提交或 `worktree.md` 台账行标一个状态，同步时按状态处理：

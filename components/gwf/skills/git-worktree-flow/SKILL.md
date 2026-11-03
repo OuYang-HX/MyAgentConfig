@@ -24,7 +24,7 @@ description: Git 纯 Worktree 多需求并行开发与 fork 上游同步的"技�
 | "初始化/第一次拉这个仓库/改成 worktree 布局" | `gwf-init` | `gwf init <url> [dir]` |
 | "开个需求/做功能/建个分支/我要改 xxx" | `gwf-new` | `gwf new <名> "<一句话目标>"` |
 | "现在什么状态/落后多少/会不会冲突/先合谁" | `gwf-scan` | `gwf status` / `gwf scan` |
-| "同步官方/更新 upstream/拉上游最新/官方发版了/rebase 到最新" | `gwf-sync` | `gwf sync --all` |
+| "同步官方/更新 upstream/拉上游最新/官方发版了/rebase 到最新/更新官方代码到我的 fork 分支" | `gwf-sync` | `gwf sync --all`（扁平仓库直接 `gwf sync`） |
 | "合入主干/收尾/清理 worktree/这个需求做完了" | `gwf-archive` | `gwf archive <目录> --merge` |
 | "打包/发版/出包/构建号/交付/装机/推到远端" | `gwf-release` | 按 `gwf-release` 流程（版本→打包→产物→交付→装机→推送） |
 

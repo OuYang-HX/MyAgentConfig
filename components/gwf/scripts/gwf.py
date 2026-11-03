@@ -166,6 +166,21 @@ def load_config(root):
 def save_config(root, cfg):
     p = Path(root) / CONFIG_FILE
     p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # 让 .gwf.json 永远不进 git（扁平布局下它就在工作区里，必须本地忽略）
+    common = run(["rev-parse", "--git-common-dir"], cwd=root).get("out", "")
+    if common:
+        gitdir = Path(root) / common if not Path(common).is_absolute() else Path(common)
+        exclude = Path(gitdir) / "info" / "exclude"
+        try:
+            content = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+            if CONFIG_FILE not in content.splitlines():
+                exclude.parent.mkdir(parents=True, exist_ok=True)
+                with open(exclude, "a", encoding="utf-8") as f:
+                    if content and not content.endswith("\n"):
+                        f.write("\n")
+                    f.write("\n# gwf 项目事实配置（本地）\n" + CONFIG_FILE + "\n")
+        except OSError:
+            pass
     return p
 
 
@@ -616,6 +631,19 @@ def sync_one(root, cfg, target, args, base):
     print("工作树 %s（分支 %s）" % (path.name, branch))
     print("=" * 68)
     print("  我们的提交        : %d 个" % len(our_commits))
+    tags = cfg.get("patch_tags") or []
+    if tags:
+        counts = []
+        untagged = 0
+        for line in our_commits:
+            subject = line.split(" ", 1)[1] if " " in line else line
+            hit = next((t for t in tags if subject.startswith(t)), None)
+            if hit:
+                counts.append(hit)
+            else:
+                untagged += 1
+        detail = ", ".join("%s %d" % (t, counts.count(t)) for t in tags)
+        print("  自定义前缀分布    : %s, 未标记 %d" % (detail, untagged))
     print("  我们的改动文件    : %d 个" % len(our_files))
     print("  上游新增提交      : %d 个" % len(upstream_commits))
     print("  上游动过我们的文件: %d 个提交   <-- 冲突高发区" % len(touched))
@@ -649,11 +677,21 @@ def sync_one(root, cfg, target, args, base):
 
     dropped = [l for l in (res["out"] + "\n" + res["err"]).splitlines()
                if "dropping" in l or "already upstream" in l]
+    # git 版本不同消息可能缺失：用 subject 对比兜底
+    try:
+        before_subjects = [l.split(" ", 1)[1].strip() for l in our_commits if " " in l]
+        after_commits = [l for l in run(["log", "--oneline", "%s..HEAD" % base], cwd=path).get("out", "").splitlines() if l.strip()]
+        after_subjects = set(l.split(" ", 1)[1].strip() for l in after_commits if " " in l)
+        for subj in before_subjects:
+            if subj not in after_subjects and not any(subj in d for d in dropped):
+                dropped.append("dropped: " + subj)
+    except Exception:
+        pass
     after = diff_size(path, base)
     print("")
     say("rebase 完成")
     if dropped:
-        print("  变空被丢弃的提交（上游多半已实现）：")
+        print("  变空被丢弃的提交（上游多半已实现，需逐条确认）：")
         for d in dropped:
             print("    %s" % d)
     print("  同步后增量: %d 文件 / %d 行" % (after[0], after[1]))
@@ -680,15 +718,23 @@ def sync_one(root, cfg, target, args, base):
     return "ok"
 
 
+def is_flat_layout(root, wts):
+    """扁平仓库：根目录本身就是唯一工作区（还没转成纯 worktree 布局）。"""
+    return len(wts) == 1 and wts[0]["path"] == root
+
+
 def cmd_sync(args):
     root = project_root()
     cfg = get_config(root)
     wts = list_worktrees()
+    flat = is_flat_layout(root, wts)
     main = pick_main_worktree(root, wts, cfg)
     if not main:
         die("找不到主干工作树")
     base = cfg.get("main_branch", "main")
     up = cfg.get("upstream_ref", "")
+    # 扁平仓库或显式 --upstream：目标分支直接变基到官方引用，不经 main 中转
+    onto_upstream = bool(up) and (flat or args.upstream)
 
     ensure_global_ignore(write=False)
 
@@ -698,7 +744,7 @@ def cmd_sync(args):
                    "+refs/heads/%s:refs/remotes/%s" % (base, up)])
         if res["code"] != 0:
             warn("fetch 失败（无网络或无该远端）: %s" % (res["err"] or res["out"])[:160])
-        else:
+        elif not onto_upstream:
             say("主干 %s 快进到 %s ..." % (base, up))
             res = run(["merge", "--ff-only", up], cwd=main["path"])
             if res["code"] != 0:
@@ -709,7 +755,10 @@ def cmd_sync(args):
                 else:
                     say("保持现有主干继续；需要把主干也变基到官方时加 --rebase-main")
 
-    if args.all:
+    if flat:
+        say("直接同步到官方 %s（不经主干中转）" % up)
+        targets = [root]
+    elif args.all and not onto_upstream:
         targets = [w["path"] for w in wts if w["branch"] != base]
     elif args.targets:
         targets = []
@@ -722,14 +771,16 @@ def cmd_sync(args):
             else:
                 die("找不到工作树: %s" % t)
     else:
+        if onto_upstream and not args.targets:
+            say("直接同步到官方 %s（不经主干中转）" % up)
         targets = [Path.cwd()]
 
     results = {}
     for t in targets:
-        if Path(t).resolve() == main["path"].resolve():
+        if not onto_upstream and Path(t).resolve() == main["path"].resolve():
             say("跳过主干 %s" % Path(t).name)
             continue
-        results[Path(t).name] = sync_one(root, cfg, t, args, base)
+        results[Path(t).name] = sync_one(root, cfg, t, args, up if onto_upstream else base)
 
     if results:
         print("")
@@ -830,6 +881,15 @@ def cmd_doctor(args):
     print("工作树数量    : %d" % len(wts))
     for w in wts:
         print("   - %-20s %s" % (w["path"].name, w["branch"]))
+    flat = is_flat_layout(root, wts)
+    print("布局          : %s" % ("扁平仓库（根目录即工作区）" if flat else "纯 worktree 拓扑"))
+    if flat:
+        say("  扁平布局可直接同步官方: gwf sync（自动直连 %s）" % (cfg.get("upstream_ref") or "upstream"))
+        say("  想获得多需求隔离（每需求一个目录）再迁移：")
+        say("    1) 确认工作区干净: git status --porcelain")
+        say("    2) cd .. && mkdir <新目录> && mv <旧目录>/.git <新目录>/.git")
+        say("    3) cd <新目录> && git --git-dir=.git worktree add <分支名> <分支名>")
+        say("    4) 核对 <分支名>/ 内容后删除旧工作区")
     print("配置文件      : %s" % ("已就绪" if (Path(root) / CONFIG_FILE).exists() else "缺失"))
     info = ensure_global_ignore()
     print("全局忽略文件  : %s%s" % (info["excludesfile"],
@@ -875,6 +935,8 @@ def build_parser():
     sp.add_argument("--verify", action="store_true", help="同步后执行 .gwf.json 里的验证命令")
     sp.add_argument("--rebase-main", action="store_true", help="主干无法快进时把主干也变基到官方")
     sp.add_argument("--skip-fetch", action="store_true", help="不联网，只用已有引用")
+    sp.add_argument("--upstream", action="store_true",
+                    help="目标分支直接变基到官方引用（扁平仓库/单分支 fork 用；扁平布局默认启用）")
     sp.set_defaults(func=cmd_sync)
 
     sp = sub.add_parser("archive", help="合入主干并归档清理工作树")

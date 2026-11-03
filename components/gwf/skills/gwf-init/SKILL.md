@@ -58,6 +58,23 @@ my-project/
 - [ ] `gwf status` 能列出主干工作树，无报错
 - [ ] `.gwf.json` 的 `main_branch` / `upstream_ref` / `verify` 与项目实际一致；不一致就手改（这是唯一需要人工确认的地方）
 
+## 已有仓库（扁平 clone）不必先迁移
+
+普通 clone 的仓库**可以直接用**：`gwf sync` 会自动识别扁平布局，把当前分支直接变基到官方
+（等价于老式"把官方更新同步到我的 fork 分支"）。只有想要"每个需求一个目录、互不干扰"时才迁移。
+
+迁移步骤（`gwf doctor` 会在扁平仓库里直接打印这几步）：
+
+```bash
+git status --porcelain            # 必须干净
+cd ..
+mkdir <新目录>
+mv <旧目录>/.git <新目录>/.git      # 只搬 Git 数据库
+cd <新目录>
+git --git-dir=.git worktree add <主分支> <主分支>   # 重建工作区
+# 核对 <主分支>/ 内容无误后，删除旧的工作区目录
+```
+
 ## 注意
 - 迁移**已存在的普通仓库**前先确认工作区干净；有未提交改动先提交或 stash。
 - 不要 `git config core.bare false`（会让根目录变成工作区，`worktree add` 会因"分支已被检出"失败）。

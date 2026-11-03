@@ -75,7 +75,7 @@
 | `upstream_ref` | 官方基线引用 | 官方分支不叫 main |
 | `verify` | 验证命令 | 探测不准（多模块、用 make 包装、需要容器） |
 | `lockfiles` | 锁文件清单 | 用了 conan/vcpkg/uv 等非默认方案 |
-| `patch_tags` | 自定义提交前缀 | 有自己的提交规范 |
+| `patch_tags` | 自定义提交前缀，`gwf sync` 审计时按前缀统计（`[fork] 3 / 未标记 1`） | 有自己的提交规范 |
 | `release` | 发版打包/交付信息 | 需要定制产物交付时（见 `release.md`） |
 
 放在项目根（`.git/` 同级），**不在任何工作树内**，所以不会被 git 跟踪，也不会污染 `git diff upstream/main..HEAD` 的单调递减统计。
