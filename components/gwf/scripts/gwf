@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# macOS / Linux 入口包装：解析软链接真实位置后转发给 gwf.py
+set -u
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$DIR/$SOURCE" ;;
+  esac
+done
+DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+exec python3 "$DIR/gwf.py" "$@"

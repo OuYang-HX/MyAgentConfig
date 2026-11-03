@@ -1,0 +1,11 @@
+# 仓库级全局 gitignore 片段
+# 安装器会把这些行合并进 core.excludesfile 指向的文件（已存在则不重复追加）。
+# 组件自己的 manifest.json 也可以声明 gitignore 条目，两者都会生效。
+
+# 通用垃圾文件
+.DS_Store
+*.swp
+*~
+
+# Agent 临时产物
+.claude/settings.local.json

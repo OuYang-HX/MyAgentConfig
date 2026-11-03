@@ -1,0 +1,40 @@
+{
+  "name": "gwf",
+  "display": "Git WorkTree Flow",
+  "description": "纯 Worktree 多需求并行开发 + fork 上游同步的技能集合（6 个技能 + gwf 命令行引擎）",
+  "version": "2.0.0",
+  "kind": "skills",
+  "skills": {
+    "dir": "skills"
+  },
+  "bin": [
+    {
+      "name": "gwf",
+      "posix": "scripts/gwf",
+      "windows": "scripts/gwf.cmd"
+    }
+  ],
+  "gitignore": [
+    "worktree.md",
+    "worktree-*.md"
+  ],
+  "git_config": {
+    "rerere.enabled": "true",
+    "rerere.autoupdate": "true"
+  },
+  "requires": [
+    {
+      "cmd": "git",
+      "reason": "需要 git worktree（2.5+）"
+    },
+    {
+      "cmd": "python3",
+      "windows": "python",
+      "reason": "gwf 引擎为纯 Python 实现"
+    }
+  ],
+  "check": {
+    "bin": "gwf",
+    "args": ["--version"]
+  }
+}
