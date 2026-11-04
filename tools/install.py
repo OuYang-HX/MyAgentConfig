@@ -89,8 +89,8 @@ def default_bin_dir():
 def is_linkish(dst):
     """判断 dst 是否为类链接（symlink 或 Windows junction）。
 
-    Windows 下 junction 在 Python 3.12 之前 dst.is_symlink() 返回 False。
-    本函数统一判定，并带 lexists 守卫杜绝不存在路径崩溃。
+    Windows 下 dst.is_symlink() 对 junction 返回 False（各版本一致），
+    故需 isjunction / realpath 兜底显式识别，并带 lexists 守卫杜绝不存在路径崩溃。
     """
     if not isinstance(dst, Path):
         dst = Path(dst)
@@ -146,7 +146,7 @@ def ensure_user_path(bin_dst, dry):
             winreg.CloseKey(key)
             return
 
-    new_val = (val + ";" + str(bin_dst)) if val else str(bin_dst)
+    new_val = (val.rstrip(";") + ";" + str(bin_dst)) if val else str(bin_dst)
     if dry:
         info("设置用户 PATH: += %s" % bin_dst)
         winreg.CloseKey(key)

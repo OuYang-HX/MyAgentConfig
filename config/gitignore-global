@@ -12,3 +12,6 @@
 
 # 本地开发过程记录（worktree 专属笔记/过程文档，不入库）
 .notes/
+
+# 代码图谱工具临时产物（CodeGraph）
+.codegraph/
