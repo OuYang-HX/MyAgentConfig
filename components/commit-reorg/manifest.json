@@ -1,0 +1,16 @@
+{
+  "name": "commit-reorg",
+  "display": "Git Commit Reorg",
+  "version": "1.0.0",
+  "kind": "skills",
+  "description": "Git 提交历史重排方法论与执行技能（plan-first 门禁、双备份+物理归档、行数预算、树等价验证）",
+  "skills": {
+    "dir": "skills"
+  },
+  "requires": [
+    {
+      "cmd": "git",
+      "reason": "提交历史重排依赖 git 重写与验证命令"
+    }
+  ]
+}

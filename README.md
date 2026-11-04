@@ -12,14 +12,19 @@ MyAgentConfig/
 ├── tools/install.py             # 安装器实现：组件发现、链接、配置合并、hook
 ├── config/gitignore-global      # 仓库级全局忽略片段（可选）
 ├── components/                  # 所有可安装组件，一个目录一个组件
-│   └── gwf/                     # 组件 1：Git WorkTree Flow
-│       ├── manifest.json        # 声明：技能目录 / 命令 / gitignore / git config / 依赖
+│   ├── gwf/                     # 组件 1：Git WorkTree Flow
+│   │   ├── manifest.json        # 声明：技能目录 / 命令 / gitignore / git config / 依赖
+│   │   ├── README.md
+│   │   ├── references/          # 细则库
+│   │   ├── scripts/             # gwf 引擎
+│   │   └── skills/              # 本组技能（每个子目录含 SKILL.md）
+│   │       ├── git-worktree-flow/
+│   │       └── gwf-init/ gwf-new/ gwf-scan/ gwf-sync/ gwf-archive/ gwf-release/
+│   └── commit-reorg/            # 组件 2：Git Commit Reorg
+│       ├── manifest.json
 │       ├── README.md
-│       ├── references/          # 细则库
-│       ├── scripts/             # gwf 引擎
-│       └── skills/              # 本组技能（每个子目录含 SKILL.md）
-│           ├── git-worktree-flow/
-│           ├── gwf-init/ gwf-new/ gwf-scan/ gwf-sync/ gwf-archive/ gwf-release/
+│       └── skills/
+│           └── git-commit-reorg/
 └── README.md
 ```
 
@@ -126,6 +131,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1      # Windows
 | 组件 | 说明 |
 | --- | --- |
 | [`gwf`](components/gwf/README.md) | **GWF = Git WorkTree Flow**：纯 worktree 多需求并行开发 + fork 上游同步治理 + 定制产物发版交付。7 个一句话技能 + `gwf` 命令 |
+| [`commit-reorg`](components/commit-reorg/README.md) | **Git Commit Reorg**：提交历史重排方法论与执行技能（plan-first 门禁、双备份+物理归档、行数预算、树等价验证）。1 个技能 |
 
 ### gwf 一句话速查
 

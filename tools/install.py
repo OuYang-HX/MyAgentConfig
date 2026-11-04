@@ -86,6 +86,81 @@ def default_bin_dir():
     return Path(os.environ.get("AGENTS_BIN_DIR") or (Path.home() / ".local" / "bin"))
 
 
+def is_linkish(dst):
+    """判断 dst 是否为类链接（symlink 或 Windows junction）。
+
+    Windows 下 junction 在 Python 3.12 之前 dst.is_symlink() 返回 False。
+    本函数统一判定，并带 lexists 守卫杜绝不存在路径崩溃。
+    """
+    if not isinstance(dst, Path):
+        dst = Path(dst)
+    if dst.is_symlink():
+        return True
+    if IS_WINDOWS:
+        if hasattr(os.path, "isjunction") and os.path.isjunction(str(dst)):
+            return True
+        # 跨版本兜底：通过 reparse point 判定（lexists 守卫防止不存在路径崩溃）
+        try:
+            sd = str(dst)
+            if os.path.lexists(sd) and os.path.realpath(sd) != os.path.abspath(sd):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def ensure_user_path(bin_dst, dry):
+    """Windows 用户 PATH 写入（通过 winreg 读写 HKCU\\Environment\\Path）。
+
+    保留原注册表类型（REG_EXPAND_SZ / REG_SZ），并做路径归一化幂等检查。
+    """
+    if not IS_WINDOWS:
+        return
+    try:
+        import winreg
+    except ImportError:
+        warn("无法导入 winreg，跳过写入用户 PATH")
+        return
+
+    target_norm = os.path.normpath(str(bin_dst)).lower()
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE)
+    except OSError as e:
+        warn("打开 HKCU\\Environment 失败: %s" % e)
+        return
+
+    try:
+        val, vtype = winreg.QueryValueEx(key, "Path")
+    except FileNotFoundError:
+        val = ""
+        vtype = winreg.REG_EXPAND_SZ
+    except OSError as e:
+        warn("读取 HKCU\\Environment\\Path 失败: %s" % e)
+        winreg.CloseKey(key)
+        return
+
+    parts = [p.strip() for p in val.split(";") if p.strip()]
+    for p in parts:
+        if os.path.normpath(p).lower() == target_norm:
+            info("用户 PATH 已包含 %s" % bin_dst)
+            winreg.CloseKey(key)
+            return
+
+    new_val = (val + ";" + str(bin_dst)) if val else str(bin_dst)
+    if dry:
+        info("设置用户 PATH: += %s" % bin_dst)
+        winreg.CloseKey(key)
+        return
+
+    try:
+        winreg.SetValueEx(key, "Path", 0, vtype, new_val)
+        ok("已将 %s 加入 Windows 用户 PATH" % bin_dst)
+    except OSError as e:
+        warn("写入 HKCU\\Environment\\Path 失败: %s" % e)
+    finally:
+        winreg.CloseKey(key)
+
+
 # ------------------------------------------------------------------ 组件
 
 def discover():
@@ -132,7 +207,7 @@ def link_dir(src, dst, dry):
     多机器同步只能靠手工拷贝。已存在的符号链接会被替换；
     真实目录不会被覆盖（提示用户自行清理后再装）。
     """
-    if dst.is_symlink() or dst.is_file():
+    if is_linkish(dst) or dst.is_file():
         if not dry:
             dst.unlink()
     elif dst.exists():
@@ -319,18 +394,17 @@ def verify(manifest, bin_dst):
 
 def link_state(dst, repo):
     """返回 (状态, 说明)。状态: ok / missing / copy / other。"""
-    if dst.is_symlink():
+    if is_linkish(dst):
         try:
             target = os.path.realpath(str(dst))
         except OSError:
-            return "other", "符号链接无法解析"
+            return "other", "链接无法解析"
         if target.startswith(os.path.realpath(repo)):
             return "ok", target
         return "other", "链接指向仓库外: %s" % target
     if dst.exists():
         return "copy", "真实目录/文件（不是链接，改动不会随仓库同步）"
     return "missing", "未安装"
-
 
 def print_status(comps, skills_dst, bin_dst):
     problems = 0
@@ -363,6 +437,14 @@ def print_status(comps, skills_dst, bin_dst):
         for entry in manifest.get("bin", []):
             bname = entry.get("name")
             target = bin_dst / (bname + (".cmd" if IS_WINDOWS else ""))
+            if IS_WINDOWS and target.is_file() and not is_linkish(target):
+                try:
+                    content = target.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    content = ""
+                if str(REPO) in content or os.path.realpath(str(REPO)) in content:
+                    ok("命令 %-22s 包装器正常（指向仓库）" % bname)
+                    continue
             state, note = link_state(target, REPO)
             if state == "ok":
                 ok("命令 %-22s 链接正常" % bname)
@@ -371,7 +453,6 @@ def print_status(comps, skills_dst, bin_dst):
             else:
                 problems += 1
                 err("命令 %-22s %s" % (bname, note))
-    print()
     if problems:
         print("待处理 %d 项：重新执行 ./install.sh 即可修复（如遇复制安装，先按提示删掉目标目录）" % problems)
     else:
@@ -382,22 +463,35 @@ def print_status(comps, skills_dst, bin_dst):
 def uninstall(skills_dst, bin_dst, dry):
     removed = 0
     repo = str(REPO)
+    repo_real = os.path.realpath(repo)
     for dst in (skills_dst, bin_dst):
         if not dst.is_dir():
             continue
         for item in dst.iterdir():
-            try:
-                target = os.readlink(str(item))
-            except OSError:
-                continue
-            if os.path.abspath(target).startswith(repo):
-                if dry:
-                    info("unlink %s" % item)
-                else:
-                    item.unlink()
-                removed += 1
+            target = None
+            if is_linkish(item):
+                try:
+                    target = os.path.realpath(str(item))
+                except OSError:
+                    continue
+                if target.startswith(repo_real) or os.path.abspath(target).startswith(repo):
+                    if dry:
+                        info("unlink %s" % item)
+                    else:
+                        item.unlink()
+                    removed += 1
+            elif IS_WINDOWS and item.is_file() and item.suffix.lower() == ".cmd":
+                try:
+                    content = item.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    content = ""
+                if repo in content or repo_real in content:
+                    if dry:
+                        info("unlink wrapper %s" % item)
+                    else:
+                        item.unlink()
+                    removed += 1
     say("已移除 %d 个链接（全局 git 配置未改动）" % removed)
-
 
 # ------------------------------------------------------------------ 主流程
 
@@ -514,6 +608,9 @@ def main():
         extras = repo_gitignore_patterns()
         if extras:
             merge_gitignore(extras, args.dry_run)
+
+    if IS_WINDOWS and total_bin:
+        ensure_user_path(bin_dst, args.dry_run)
 
     head("汇总")
     say("组件 %d 个，技能 %d 个，命令 %d 个，失败 %d 个" % (len(comps), total_skills, total_bin, failures))
