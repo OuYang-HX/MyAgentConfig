@@ -79,11 +79,11 @@ A：该分支已被某个工作树检出。`git worktree list` 查位置，或�
 **Q：根目录 `git status` 报一堆删除**
 A：说明被设成了 `core.bare false`。改回 `git --git-dir=.git config core.bare true`，并把根目录的散落文件移进 `main/`。
 
-**Q：`worktree.md` 出现在 `git status` 里**
+**Q：`worktree.md` 或 `.notes/` 出现在 `git status` 里**
 A：全局忽略没生效。`gwf doctor` 检查，或手动：
 ```bash
 git config --global core.excludesfile ~/.gitignore_global
-echo "worktree.md" >> ~/.gitignore_global
+echo -e "worktree.md\n.notes/" >> ~/.gitignore_global
 ```
 
 **Q：磁盘占太多**
