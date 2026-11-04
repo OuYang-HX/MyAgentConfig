@@ -20,11 +20,16 @@ MyAgentConfig/
 │   │   └── skills/              # 本组技能（每个子目录含 SKILL.md）
 │   │       ├── git-worktree-flow/
 │   │       └── gwf-init/ gwf-new/ gwf-scan/ gwf-sync/ gwf-archive/ gwf-release/
-│   └── commit-reorg/            # 组件 2：Git Commit Reorg
+│   ├── commit-reorg/            # 组件 2：Git Commit Reorg
+│   │   ├── manifest.json
+│   │   ├── README.md
+│   │   └── skills/
+│   │       └── git-commit-reorg/
+│   └── agent-dev/               # 组件 3：Agent/Skill/Workflow 开发规范与自查
 │       ├── manifest.json
 │       ├── README.md
 │       └── skills/
-│           └── git-commit-reorg/
+│           └── agent-skill-workflow-dev/
 └── README.md
 ```
 
@@ -132,6 +137,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1      # Windows
 | --- | --- |
 | [`gwf`](components/gwf/README.md) | **GWF = Git WorkTree Flow**：纯 worktree 多需求并行开发 + fork 上游同步治理 + 定制产物发版交付。7 个一句话技能 + `gwf` 命令 |
 | [`commit-reorg`](components/commit-reorg/README.md) | **Git Commit Reorg**：提交历史重排方法论与执行技能（plan-first 门禁、双备份+物理归档、行数预算、树等价验证）。1 个技能 |
+| [`agent-dev`](components/agent-dev/README.md) | **Agent/Skill/Workflow 开发规范与自查**：通用件纪律（场景差异走输入）、LLM 交互契约、编排接线、双模式（开发 7 步 + 自查 14 条清单）。1 个技能 |
 
 ### gwf 一句话速查
 

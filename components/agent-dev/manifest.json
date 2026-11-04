@@ -1,0 +1,10 @@
+{
+  "name": "agent-dev",
+  "display": "Agent / Skill / Workflow Development",
+  "version": "1.0.0",
+  "kind": "skills",
+  "description": "Agent、Skill、Workflow 开发规范与自查技能：通用件复用优先、输入外置不写死、LLM 交互契约、脚本健壮性纪律、产物与编排分离",
+  "skills": {
+    "dir": "skills"
+  }
+}
