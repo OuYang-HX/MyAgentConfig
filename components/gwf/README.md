@@ -36,7 +36,7 @@ components/gwf/
 
 | 场景 | 技能 | 命令 |
 | --- | --- | --- |
-| 建仓 / 迁移 / 换机器体检 | `gwf-init` | `gwf init` / `gwf doctor` |
+| 建仓 / 迁移 / 换机器体检 | `gwf-init` | `gwf init` / `gwf migrate` / `gwf doctor` |
 | 开需求 | `gwf-new` | `gwf new` |
 | 看状态 / 查冲突 | `gwf-scan` | `gwf status` / `gwf scan` |
 | 同步官方代码 | `gwf-sync` | `gwf sync --all` |

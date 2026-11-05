@@ -2,7 +2,7 @@
   "name": "gwf",
   "display": "Git WorkTree Flow",
   "description": "纯 Worktree 多需求并行开发 + fork 上游同步的技能集合（6 个技能 + gwf 命令行引擎）",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "kind": "skills",
   "skills": {
     "dir": "skills"
@@ -16,7 +16,8 @@
   ],
   "gitignore": [
     "worktree.md",
-    "worktree-*.md"
+    "worktree-*.md",
+    ".gwf.json"
   ],
   "git_config": {
     "rerere.enabled": "true",

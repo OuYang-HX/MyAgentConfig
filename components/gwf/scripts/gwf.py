@@ -13,6 +13,7 @@ gwf - Git Worktree Flow CLI
 
 命令：
     gwf init <url> [dir] [--fork URL]   初始化纯 worktree 拓扑仓库
+    gwf migrate [--force]               扁平仓库就地整改为纯 worktree 拓扑
     gwf new <name> [desc]               开新需求：建 worktree + 生成 worktree.md
     gwf status                          所有工作树状态总览
     gwf scan                            并行分支冲突/重叠预警
@@ -23,16 +24,19 @@ gwf - Git Worktree Flow CLI
 """
 
 import argparse
+import filecmp
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 CONFIG_FILE = ".gwf.json"
 DOC_FILE = "worktree.md"
-VERSION = "2.2.1"
+VERSION = "2.3.0"
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -139,9 +143,18 @@ def list_worktrees(cwd=None):
     if cur:
         blocks.append(cur)
     items = []
+    root = project_root()
+    root_is_bare = None
     for b in blocks:
         if b.get("bare"):
             continue
+        wt_path = Path(b.get("worktree")).resolve()
+        if wt_path == root and (root / ".git").is_dir():
+            # 仅当根目录为 bare 模式时才跳过（避免普通克隆工作区被误跳过）
+            if root_is_bare is None:
+                root_is_bare = run(["config", "--get", "core.bare"], cwd=root).get("out", "") == "true"
+            if root_is_bare:
+                continue
         ref = b.get("branch", "")
         items.append({
             "path": Path(b.get("worktree")).resolve(),
@@ -335,7 +348,7 @@ def get_config(root, auto_write=True):
 
 
 def ensure_global_ignore(write=True):
-    """确保 worktree.md 被全局 gitignore 排除，并开启 rerere。"""
+    """确保 worktree.md 与 .gwf.json 被全局 gitignore 排除，并开启 rerere。"""
     info = {"excludesfile": "", "created": False, "appended": False, "rerere": False}
     res = run(["config", "--global", "core.excludesfile"])
     path = res["out"] if res["code"] == 0 and res["out"] else ""
@@ -347,7 +360,7 @@ def ensure_global_ignore(write=True):
     info["excludesfile"] = path
 
     p = Path(os.path.expanduser(path))
-    needed = ["worktree.md", "worktree-*.md"]
+    needed = ["worktree.md", "worktree-*.md", ".gwf.json"]
     content = ""
     if p.exists():
         try:
@@ -361,7 +374,7 @@ def ensure_global_ignore(write=True):
             with open(p, "a", encoding="utf-8") as f:
                 if content and not content.endswith("\n"):
                     f.write("\n")
-                f.write("\n# gwf: 工作树本地需求文档，不入库\n")
+                f.write("\n# gwf: 工作树本地需求文档与项目配置，不入库\n")
                 for n in missing:
                     f.write(n + "\n")
             info["appended"] = True
@@ -517,6 +530,157 @@ def cmd_init(args):
     say('下一步: cd "%s" && gwf new <需求名> "<一句话目标>"' % root)
 
 
+# ---------------------------------------------------------------- migrate
+
+def _tracked_dirs(tracked):
+    """把已跟踪文件列表展开为其所有祖先目录，用于判断目录树里是否含已检出内容。"""
+    dirs = set()
+    for p in tracked:
+        parts = p.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            dirs.add("/".join(parts[:i]))
+    return dirs
+
+
+def migrate_flat_content(root, target_dir):
+    """把扁平工作区内容归位到主干工作树，绝不覆盖已检出文件。
+
+    - 目标缺失：直接搬过去（未跟踪/被忽略的本地文件、node_modules 等）
+    - 目标存在且内容相同：丢弃根目录副本
+    - 目标存在但内容不同：归档到 `.gwf-migrate-backup-<时间戳>/`，不覆盖任何一侧
+
+    返回 (归档目录或 None, 已归档的相对路径列表)。
+    """
+    tracked = {p for p in run(["ls-files", "-z"], cwd=root).get("out", "").split("\0") if p}
+    tracked_dirs = _tracked_dirs(tracked)
+    backup = root / (".gwf-migrate-backup-" + time.strftime("%Y%m%d-%H%M%S"))
+    archived = []
+    skip_top = {".git", CONFIG_FILE, target_dir.name}
+
+    def exists(p):
+        return p.exists() or p.is_symlink()
+
+    def archive(src, rel):
+        dest = backup / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+        archived.append(rel)
+
+    def place(src, rel):
+        dest = target_dir / rel
+        if not exists(dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            return
+        if dest.is_file() and not dest.is_symlink() and not src.is_symlink():
+            try:
+                if filecmp.cmp(str(src), str(dest), shallow=False):
+                    src.unlink()
+                    return
+            except OSError:
+                pass
+        archive(src, rel)
+
+    def walk(d):
+        for entry in sorted(d.iterdir()):
+            p = d / entry.name
+            rel = p.relative_to(root).as_posix()
+            if rel.split("/")[0] in skip_top or rel.startswith(".gwf-migrate-backup-"):
+                continue
+            if p.is_symlink() or not p.is_dir():
+                place(p, rel)
+                continue
+            if rel not in tracked_dirs and not exists(target_dir / rel):
+                # 纯本地目录（node_modules、.venv 等），整目录搬移，保留 rename 语义
+                dest = target_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(p), str(dest))
+                continue
+            walk(p)
+            try:
+                p.rmdir()
+            except OSError:
+                pass
+
+    walk(root)
+    return (backup if archived else None), archived
+
+
+def cmd_migrate(args):
+    """将普通克隆的扁平仓库就地快速整改为纯 worktree 拓扑。"""
+    root = project_root()
+    wts = list_worktrees()
+    if not is_flat_layout(root, wts):
+        die("当前仓库已是纯 worktree 拓扑或非单工作区扁平仓库，无需迁移")
+
+    # 状态检查
+    tracked, _untracked = split_status(root)
+    if tracked and not args.force:
+        die("当前工作区有未提交的改动，请先提交或 stash，或加 --force 强制继续：\n%s"
+            % "\n".join(tracked[:10]))
+    if tracked:
+        warn("工作区有 %d 处未提交改动；迁移会把与检出内容不同的副本归档，不会覆盖" % len(tracked))
+
+    branch = run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=root).get("out", "")
+    if not branch or branch == "HEAD":
+        # 尝试从常见主干分支找
+        for cand in ("main", "master"):
+            if git_ok(["rev-parse", "--verify", "--quiet", "refs/heads/%s" % cand], cwd=root):
+                branch = cand
+                break
+    if not branch or branch == "HEAD":
+        die("无法识别当前主干分支名（处于 detached HEAD 状态）")
+
+    target_dir = root / branch
+    if target_dir.exists():
+        die("目标目录 %s 已存在，迁移前请先处理该目录" % target_dir)
+
+    say("正在将扁平仓库就地整改为纯 worktree 拓扑（主干: %s）..." % branch)
+
+    # 1. 确保全局忽略生效（worktree.md, .gwf.json）
+    ensure_global_ignore()
+
+    # 2. 将 core.bare 设为 true
+    res = run(["config", "core.bare", "true"], cwd=root)
+    if res["code"] != 0:
+        die("设置 core.bare 失败: %s" % (res["err"] or res["out"]))
+
+    # 3. 创建主干工作树（git worktree add 要求目标目录不存在或为空）
+    res = run(["worktree", "add", branch, branch], cwd=root)
+    if res["code"] != 0:
+        # 失败必须回滚，否则根目录变成无工作树的 bare 仓库，工作区不可用
+        run(["config", "core.bare", "false"], cwd=root)
+        die("创建主干工作树失败（已恢复 core.bare=false）: %s" % (res["err"] or res["out"]))
+
+    # 4. 把根目录剩余的本地内容归位到主干工作树（不覆盖已检出文件）
+    backup, archived = migrate_flat_content(root, target_dir)
+
+    # 5. 生成/更新配置
+    new_wts = list_worktrees(cwd=root)
+    cfg = detect_config(root, wts=new_wts)
+    cfg["main_branch"] = branch
+    cfg["main_worktree"] = branch
+    save_config(root, cfg)
+
+    say("整改完成！已就绪为纯 worktree 拓扑。")
+    if backup:
+        warn("%d 个与检出内容冲突的本地副本已归档到 %s（未覆盖任何一侧）" % (len(archived), backup.name))
+        for rel in archived[:10]:
+            print("  - %s" % rel)
+        if len(archived) > 10:
+            print("  ... 其余 %d 项见该目录" % (len(archived) - 10))
+    print("")
+    say("当前目录结构:")
+    for child in sorted(Path(root).iterdir()):
+        if child.is_dir() and child.name.startswith(".") and child.name != ".git":
+            continue
+        say("  %s" % (child.name + "/" if child.is_dir() else child.name))
+    print("")
+    say('接下来进入主干工作树或直接开新需求:')
+    print('  cd "%s"' % branch)
+    print('  gwf new <需求名> "<一句话目标>"')
+
+
 # ---------------------------------------------------------------- new
 
 def cmd_new(args):
@@ -528,7 +692,8 @@ def cmd_new(args):
         die("找不到主干工作树")
     if is_flat_layout(root, wts) and not getattr(args, "force", False):
         die("当前是扁平仓库（根目录即工作区），先在需求隔离上开工作树会打架。\n"
-            "  迁移步骤见 gwf doctor 的输出，或加 --force 强制继续。")
+            "  一键整改命令: gwf migrate\n"
+            "  或加 --force 强制继续。")
 
     name = args.name.strip()
     folder = name if re.match(r"^(feat|fix|chore|refactor|perf)-", name) else "feat-" + slugify(name)
@@ -1079,11 +1244,7 @@ def cmd_doctor(args):
     print("布局          : %s" % ("扁平仓库（根目录即工作区）" if flat else "纯 worktree 拓扑"))
     if flat:
         say("  扁平布局可直接同步官方: gwf sync（自动直连 %s）" % (cfg.get("upstream_ref") or "upstream"))
-        say("  想获得多需求隔离（每需求一个目录）再迁移：")
-        say("    1) 确认工作区干净: git status --porcelain")
-        say("    2) cd .. && mkdir <新目录> && mv <旧目录>/.git <新目录>/.git")
-        say("    3) cd <新目录> && git --git-dir=.git worktree add <分支名> <分支名>")
-        say("    4) 核对 <分支名>/ 内容后删除旧工作区")
+        say("  一键整改为纯 worktree 拓扑: gwf migrate")
     print("配置文件      : %s" % ("已就绪" if (Path(root) / CONFIG_FILE).exists() else "缺失"))
     info = ensure_global_ignore()
     print("全局忽略文件  : %s%s" % (info["excludesfile"],
@@ -1092,9 +1253,13 @@ def cmd_doctor(args):
     main = pick_main_worktree(root, wts, cfg)
     if main:
         ignored = run(["check-ignore", "-q", DOC_FILE], cwd=main["path"])["code"] == 0
+        cfg_ignored = run(["check-ignore", "-q", CONFIG_FILE], cwd=main["path"])["code"] == 0
         print("worktree.md   : %s" % ("已被忽略 OK" if ignored else "未被忽略（会进 git 历史！）"))
+        print(".gwf.json     : %s" % ("已被忽略 OK" if cfg_ignored else "未被忽略（会进 git 历史！）"))
         if not ignored:
             warn("请在全局忽略文件里加入 worktree.md")
+        if not cfg_ignored:
+            warn("请在全局忽略文件里加入 .gwf.json")
     print("")
 
 
@@ -1113,6 +1278,10 @@ def build_parser():
     sp.add_argument("dir", nargs="?", help="目标目录名")
     sp.add_argument("--fork", default="", help="个人 fork 地址（写入 origin 远端）")
     sp.set_defaults(func=cmd_init)
+
+    sp = sub.add_parser("migrate", help="将普通克隆的扁平仓库就地整改为纯 worktree 拓扑")
+    sp.add_argument("--force", action="store_true", help="工作区有改动时强制迁移")
+    sp.set_defaults(func=cmd_migrate)
 
     sp = sub.add_parser("new", help="开新需求：建 worktree + 生成 worktree.md")
     sp.add_argument("name", help="需求名（如 login 或 feat-login）")

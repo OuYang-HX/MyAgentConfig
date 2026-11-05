@@ -21,7 +21,7 @@ description: Git 纯 Worktree 多需求并行开发与 fork 上游同步的"技�
 
 | 用户的话 | 加载技能 | 一句话命令 |
 | --- | --- | --- |
-| "初始化/第一次拉这个仓库/改成 worktree 布局" | `gwf-init` | `gwf init <url> [dir]` |
+| "初始化/第一次拉这个仓库/改成 worktree 布局" | `gwf-init` | `gwf init <url> [dir]`（已有扁平仓用 `gwf migrate`） |
 | "开个需求/做功能/建个分支/我要改 xxx" | `gwf-new` | `gwf new <名> "<一句话目标>"` |
 | "现在什么状态/落后多少/会不会冲突/先合谁" | `gwf-scan` | `gwf status` / `gwf scan` |
 | "同步官方/更新 upstream/拉上游最新/官方发版了/rebase 到最新/更新官方代码到我的 fork 分支" | `gwf-sync` | `gwf sync --all`（扁平仓库直接 `gwf sync`） |
@@ -36,7 +36,7 @@ description: Git 纯 Worktree 多需求并行开发与 fork 上游同步的"技�
 3. **先备份、后核对、再清理**：任何可能丢提交的操作（同步/变基）前自动建 `backup/*` 分支；
    确认原有功能没丢之后再删，绝不凭记忆判断。
 4. **重写而非拼贴**：上游结构变了，就以新结构为基底重写，不留死路径。
-5. **`worktree.md` 与 `.notes/` 不进 git**：过程记录与草稿放工作树根目录 `.notes/`，任务状态写 `worktree.md`，均靠全局 `core.excludesfile` 排除。
+5. **`worktree.md`、`.gwf.json` 与 `.notes/` 不进 git**：过程记录与草稿放工作树根目录 `.notes/`，任务状态写 `worktree.md`，均靠全局 `core.excludesfile` 排除。
 6. **根目录无代码**：只允许 `.git/`、`.gwf.json` 和各分支目录。
 7. **不擅自动门禁**：类型错误/lint/测试按仓库规则改代码，不加 disable、不改阈值。
 8. **脏工作树先问**：有未提交改动时先提交或 stash，绝不 reset 丢弃。

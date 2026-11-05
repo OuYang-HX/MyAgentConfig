@@ -31,7 +31,7 @@ gwf sync --backup-push       # 备份分支同时推到个人远端
 | **扁平仓库**（普通 clone，未转 worktree） | `gwf sync` | 自动识别，当前分支**直接**变基到 `upstream/<branch>`，等价于老式"把官方更新同步到我的 fork 分支" |
 | 纯 worktree 但某分支要直接对官方 | `gwf sync <目录> --upstream` | 该分支直接 rebase 到官方引用 |
 
-扁平仓库不需要先迁移就能用；想要多需求隔离再按 `gwf-init` 的迁移步骤转成 worktree 布局。
+扁平仓库不需要先迁移就能用；想要多需求隔离就跑 `gwf migrate`（一键就地整改，冲突副本自动归档）。
 
 ## 它替你做的决定（所以不用你说条件）
 

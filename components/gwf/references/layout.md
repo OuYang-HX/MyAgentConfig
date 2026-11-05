@@ -42,16 +42,25 @@ git --git-dir=.git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin
 
 ## 旧仓迁移（已有普通 clone）
 
+首选一键整改（工作区干净时直接跑，`--force` 可带未提交改动，冲突副本会归档）：
+
 ```bash
 cd existing-project
-git status --porcelain          # 必须干净
-# 1) 把当前分支检出到一个子目录
-git worktree add ./main <当前分支>
-# 2) 确认 ./main 内容正确后，删除根目录的散落文件（它们已在 main/ 中）
-# 3) 根目录只留 .git/、main/、其它 worktree
+gwf migrate
+```
+
+它等价于下面这套原生命令：
+
+```bash
+cd existing-project
+git status --porcelain              # 必须干净
+git config core.bare true           # 根目录退化为仓库本体，不再是工作区
+git worktree add <主分支> <主分支>   # 重建工作区到 ./<主分支>/
+# 3) 把根目录剩余的未跟踪/被忽略内容搬进 ./<主分支>/，根目录只留 .git/、.gwf.json、各工作树
 ```
 
 迁移前务必确认：未提交改动已提交或 stash；`.gitignore` 未把源码忽略掉。
+`core.bare true` 与 `worktree add` 必须成对执行：漏掉后者会让仓库卡在"没有工作树"的状态。
 
 ## 从任意子目录定位项目根
 
