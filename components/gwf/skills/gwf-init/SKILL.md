@@ -70,6 +70,7 @@ my-project/
    - 已跟踪且未修改的内容：丢弃根目录副本（内容与检出结果一致）
    - 未跟踪/被忽略的本地内容（`node_modules`、`.venv`、`worktree.md` 等）：整目录搬入主干工作树
    - 与检出内容不一致的副本（`--force` 下的未提交修改等）：归档到 `.gwf-migrate-backup-<时间戳>/`，**不覆盖任何一侧**
+   - submodule（index 中 mode 160000）：**不搬移、不递归**（其 `.git` 记录的是相对旧位置的 gitdir，搬了必失效）；干净的直接移除，有本地改动的整目录归档，迁移后在新主干工作树执行 `git submodule update --init --recursive` 复原
    - `git worktree add` 失败会自动回滚 `core.bare`，不会把仓库卡成无工作树的 bare 状态
 
 2. **不整改直接使用**：

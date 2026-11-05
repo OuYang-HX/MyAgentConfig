@@ -542,19 +542,45 @@ def _tracked_dirs(tracked):
     return dirs
 
 
+def _gitlink_paths(root):
+    """索引中 mode 160000 的路径（submodule），迁移时绝不递归进入。"""
+    paths = set()
+    for entry in run(["ls-files", "-s", "-z"], cwd=root).get("out", "").split("\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition("\t")
+        if path and meta.startswith("160000 "):
+            paths.add(path)
+    return paths
+
+
+def _submodule_expendable(path):
+    """未初始化（空目录）或工作区与 HEAD 完全一致时返回 True——内容可由 git 复原。"""
+    if not (path / ".git").exists():
+        try:
+            return not any(path.iterdir())
+        except OSError:
+            return False
+    res = run(["status", "--porcelain"], cwd=path)
+    return res["code"] == 0 and not res["out"]
+
+
 def migrate_flat_content(root, target_dir):
     """把扁平工作区内容归位到主干工作树，绝不覆盖已检出文件。
 
     - 目标缺失：直接搬过去（未跟踪/被忽略的本地文件、node_modules 等）
     - 目标存在且内容相同：丢弃根目录副本
     - 目标存在但内容不同：归档到 `.gwf-migrate-backup-<时间戳>/`，不覆盖任何一侧
+    - submodule（gitlink）：不搬移、不递归——干净则移除，否则归档；新工作树需 `git submodule update --init`
 
-    返回 (归档目录或 None, 已归档的相对路径列表)。
+    返回 (归档目录或 None, 已归档的相对路径列表, 处理过的 submodule 路径列表)。
     """
     tracked = {p for p in run(["ls-files", "-z"], cwd=root).get("out", "").split("\0") if p}
     tracked_dirs = _tracked_dirs(tracked)
+    gitlinks = _gitlink_paths(root)
     backup = root / (".gwf-migrate-backup-" + time.strftime("%Y%m%d-%H%M%S"))
     archived = []
+    submodules = []
     skip_top = {".git", CONFIG_FILE, target_dir.name}
 
     def exists(p):
@@ -581,11 +607,29 @@ def migrate_flat_content(root, target_dir):
                 pass
         archive(src, rel)
 
+    def take_submodule(p, rel):
+        # 子模块的 .git 文件与 core.worktree 记的是相对旧位置的路径，整目录搬移会直接失效
+        dest = target_dir / rel
+        if dest.is_dir() and not dest.is_symlink():
+            try:
+                if not any(dest.iterdir()):
+                    dest.rmdir()  # worktree add 只为 gitlink 建了空目录
+            except OSError:
+                pass
+        if _submodule_expendable(p):
+            shutil.rmtree(str(p), ignore_errors=True)
+        else:
+            archive(p, rel)
+        submodules.append(rel)
+
     def walk(d):
         for entry in sorted(d.iterdir()):
             p = d / entry.name
             rel = p.relative_to(root).as_posix()
             if rel.split("/")[0] in skip_top or rel.startswith(".gwf-migrate-backup-"):
+                continue
+            if rel in gitlinks:
+                take_submodule(p, rel)
                 continue
             if p.is_symlink() or not p.is_dir():
                 place(p, rel)
@@ -603,7 +647,7 @@ def migrate_flat_content(root, target_dir):
                 pass
 
     walk(root)
-    return (backup if archived else None), archived
+    return (backup if archived else None), archived, submodules
 
 
 def cmd_migrate(args):
@@ -653,7 +697,7 @@ def cmd_migrate(args):
         die("创建主干工作树失败（已恢复 core.bare=false）: %s" % (res["err"] or res["out"]))
 
     # 4. 把根目录剩余的本地内容归位到主干工作树（不覆盖已检出文件）
-    backup, archived = migrate_flat_content(root, target_dir)
+    backup, archived, submodules = migrate_flat_content(root, target_dir)
 
     # 5. 生成/更新配置
     new_wts = list_worktrees(cwd=root)
@@ -669,6 +713,12 @@ def cmd_migrate(args):
             print("  - %s" % rel)
         if len(archived) > 10:
             print("  ... 其余 %d 项见该目录" % (len(archived) - 10))
+    if submodules:
+        say("%d 个子模块的旧检出未随迁移搬移（相对 gitdir 会失效）：" % len(submodules))
+        for rel in submodules[:10]:
+            print("  - %s" % rel)
+        print("  在新主干工作树里重新初始化：")
+        print('    cd "%s" && git submodule update --init --recursive' % branch)
     print("")
     say("当前目录结构:")
     for child in sorted(Path(root).iterdir()):
