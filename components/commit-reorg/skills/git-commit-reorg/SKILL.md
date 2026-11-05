@@ -18,7 +18,7 @@ description: Git 提交历史重排与原子化拆分。当用户明确要求整
    - 验证方案与风险提示。
    **只有获得用户明确许可后方可进入执行阶段。**
 3. **双备份 + 物理归档**：
-   - Git 引用双备份：在重写前建立 `git branch backup/<name>-<timestamp>` 与 `git tag pre-reorg-<name>-<timestamp>`，并立即验证两个引用严格指向当前 HEAD。
+   - Git 引用双备份：在重写前建立 `git branch backup/reorg-<name>-<timestamp>` 与 `git tag pre-reorg-<name>-<timestamp>`，并立即验证两个引用严格指向当前 HEAD（前缀固定为 `backup/reorg-`，避免与 gwf sync 的分支备份冲突）。
    - 仓库外物理归档：使用 `git format-patch <base>..HEAD -o <archive_dir>` 及 `git diff <base>..HEAD > <archive_dir>/full.patch` 物理归档至仓库外安全目录，防止工作树丢失。
 4. **单提交预算约束**：
    - 以 `git diff <base>..HEAD --numstat` 最终态全量改动为基准。
