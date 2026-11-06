@@ -62,7 +62,7 @@ git worktree add -b feat/<name> ./feat-<name> main
 ```
 
 ## 验收清单
-- [ ] `ls <根>` 只有 `.git/`、`.gwf.json`、各分支目录
+- [ ] 容器根含 `.git/`、`.gwf.json`、可选 `AGENTS.md`、Git 登记的工作树及配置登记的受保护普通目录
 - [ ] `gwf status` 中能看到新工作树，`behind = 0`
 - [ ] 新目录内 `git status --porcelain` 为空（说明 `worktree.md` 确实被全局忽略）
 - [ ] `worktree.md` 第 3 节至少有一行可执行的覆盖判据（否则后续同步时无法判断该不该删）

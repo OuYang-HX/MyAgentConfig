@@ -25,10 +25,12 @@ gwf - Git Worktree Flow CLI
 
 import argparse
 import filecmp
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -62,6 +64,7 @@ def run(args, cwd=None, check=False):
             cwd=str(cwd) if cwd else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
         )
         out, err = p.communicate()
         res = {
@@ -172,7 +175,7 @@ def load_config(root):
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception as e:
-        warn("%s 解析失败(%s)，将重新探测" % (p, e))
+        warn("%s 解析失败(%s)" % (p, e))
         return None
 
 
@@ -336,16 +339,107 @@ def detect_config(root, wts=None):
     }
 
 
-def get_config(root, auto_write=True):
+def get_config(root, auto_write=False):
     cfg = load_config(root)
-    if cfg:
+    if cfg is not None:
+        if not isinstance(cfg, dict):
+            die("配置必须是 JSON 对象")
         return cfg
+    if (Path(root) / CONFIG_FILE).exists():
+        die("配置无效，拒绝忽略已有的保护设置")
     cfg = detect_config(root)
     if auto_write:
         p = save_config(root, cfg)
         say("已自动探测并生成项目配置: %s" % p)
+    else:
+        say("配置缺失或无效：仅在内存中探测；使用 gwf config init 显式保存")
     return cfg
 
+
+
+def git_paths(cwd, args):
+    """Read NUL-terminated Git paths without shell quoting or newline ambiguity."""
+    proc = subprocess.run(["git"] + args, cwd=str(cwd), stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+    if proc.returncode:
+        die("无法读取 Git 路径: %s" % proc.stderr.decode("utf-8", "replace"))
+    return {os.fsdecode(x) for x in proc.stdout.split(b"\0") if x}
+
+
+def safe_relative(root, value):
+    p = Path(value)
+    if p.is_absolute() or not p.parts or any(x in ("..", ".") for x in p.parts):
+        die("路径必须是容器内相对路径: %s" % value)
+    target = Path(root) / p
+    current = Path(root)
+    for part in p.parts:
+        current = current / part
+        if current.is_symlink():
+            die("拒绝符号链接路径: %s" % value)
+    if not target.resolve().is_relative_to(Path(root).resolve()):
+        die("路径超出容器: %s" % value)
+    return target
+
+
+def protected_paths(root, cfg):
+    values = cfg.get("protected_dirs", [])
+    if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+        die("protected_dirs 必须是相对目录列表")
+    return [safe_relative(root, value).resolve() for value in values]
+
+
+def check_boundary(root, cfg, path):
+    target = Path(path).resolve()
+    for protected in protected_paths(root, cfg):
+        if target == protected or target.is_relative_to(protected) or protected.is_relative_to(target):
+            die("目标与受保护目录重叠: %s" % path)
+
+
+def registered_target(root, cfg, wts, value):
+    path = safe_relative(root, value)
+    check_boundary(root, cfg, path)
+    matches = [w for w in wts if w["path"] == path.resolve()]
+    if len(matches) != 1:
+        die("目标不是 Git 登记的工作树: %s" % value)
+    if role(root, cfg, matches[0]) == "resource":
+        die("资源工作树不可同步或归档: %s" % value)
+    return matches[0]
+
+
+
+def validate_main(root, cfg, wts, main):
+    if not main or main["branch"] != cfg.get("main_branch", "main"):
+        die("找不到配置的主干工作树")
+    if main["path"] == root:
+        check_boundary(root, cfg, root)
+        if role(root, cfg, main) == "resource":
+            die("主干不能是资源工作树")
+    else:
+        registered_target(root, cfg, wts, os.path.relpath(main["path"], root))
+
+def role(root, cfg, w):
+    resources = cfg.get("resource_worktrees", [])
+    if not isinstance(resources, list) or not all(isinstance(v, str) for v in resources):
+        die("resource_worktrees 必须是相对工作树路径列表")
+    paths = [safe_relative(root, x).resolve() for x in resources]
+    return "resource" if w["path"] in paths else "source"
+
+
+def related(w, base):
+    return git_ok(["merge-base", base, "HEAD"], cwd=w["path"])
+
+
+def working_paths(path):
+    return (git_paths(path, ["diff", "--name-only", "-z", "--no-renames"]) |
+            git_paths(path, ["diff", "--cached", "--name-only", "-z", "--no-renames"]) |
+            git_paths(path, ["ls-files", "--others", "--exclude-standard", "-z"]))
+
+
+def changed_paths(path, base):
+    merge_base = run(["merge-base", base, "HEAD"], cwd=path)["out"]
+    if not merge_base:
+        die("无法确定与 %s 的共同祖先" % base)
+    return git_paths(path, ["diff", "--name-only", "-z", "--no-renames", merge_base + "..HEAD"]) | working_paths(path)
 
 def ensure_global_ignore(write=True):
     """确保 worktree.md 与 .gwf.json 被全局 gitignore 排除，并开启 rerere。"""
@@ -746,9 +840,13 @@ def cmd_new(args):
             "  或加 --force 强制继续。")
 
     name = args.name.strip()
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        die("需求名必须是单个目录名")
+    validate_main(root, cfg, wts, main)
     folder = name if re.match(r"^(feat|fix|chore|refactor|perf)-", name) else "feat-" + slugify(name)
     branch = folder.replace("-", "/", 1) if re.match(r"^(feat|fix|chore|refactor|perf)-", folder) else folder
-    dest = Path(root) / folder
+    dest = safe_relative(root, folder)
+    check_boundary(root, cfg, dest)
     if dest.exists():
         die("目录 %s 已存在" % dest)
 
@@ -805,29 +903,33 @@ def cmd_new(args):
     (dest / DOC_FILE).write_text(doc, encoding="utf-8")
 
     say("完成：%s（分支 %s）" % (dest, branch))
-    say("%s 已生成（全局 gitignore 已排除，不会入库）" % (dest / DOC_FILE))
+    ignored = git_ok(["check-ignore", "-q", DOC_FILE], cwd=dest)
+    say("%s 已生成%s" % (dest / DOC_FILE, "（已忽略）" if ignored else "（未被忽略，请按项目规则保全）"))
     print("")
     print('  接下来: cd "%s"' % folder)
 
 
 # ---------------------------------------------------------------- status / scan
 
+
+def worktree_label(root, w):
+    return root.name if w["path"] == root else os.path.relpath(w["path"], root)
+
 def feature_rows(root, wts, cfg, base=None):
     base = base or cfg.get("main_branch", "main")
     rows = []
     for w in wts:
-        ahead = run(["rev-list", "--count", "%s..HEAD" % base], cwd=w["path"]).get("out", "?")
-        behind = run(["rev-list", "--count", "HEAD..%s" % base], cwd=w["path"]).get("out", "?")
+        kind = role(root, cfg, w)
+        connected = related(w, base)
+        category = "resource" if kind == "resource" else ("source" if connected else "unrelated")
         tracked, untracked = split_status(w["path"])
-        dirty = len(tracked)
-        files = len([l for l in run(["diff", "--name-only", "%s..HEAD" % base], cwd=w["path"]).get("out", "").splitlines() if l.strip()])
-        sha = run(["rev-parse", "--short", "HEAD"], cwd=w["path"]).get("out", "")
-        subj = run(["log", "-1", "--pretty=%s"], cwd=w["path"]).get("out", "")
-        rows.append({
-            "folder": w["path"].name, "branch": w["branch"], "ahead": ahead,
-            "behind": behind, "dirty": dirty, "untracked": len(untracked), "files": files, "sha": sha,
-            "subject": subj, "doc": (w["path"] / DOC_FILE).exists(),
-        })
+        rows.append({"folder": worktree_label(root, w), "branch": w["branch"], "role": category,
+                     "ahead": run(["rev-list", "--count", base + "..HEAD"], cwd=w["path"])["out"] if category == "source" else "-",
+                     "behind": run(["rev-list", "--count", "HEAD.." + base], cwd=w["path"])["out"] if category == "source" else "-",
+                     "dirty": len(tracked), "untracked": len(untracked),
+                     "files": len(changed_paths(w["path"], base)) if category == "source" else "-",
+                     "sha": run(["rev-parse", "--short", "HEAD"], cwd=w["path"])["out"],
+                     "subject": run(["log", "-1", "--pretty=%s"], cwd=w["path"])["out"]})
     return rows
 
 
@@ -836,85 +938,69 @@ def cmd_status(args):
     cfg = get_config(root)
     wts = list_worktrees()
     upstream = cfg.get("upstream_ref", "")
-    flat = is_flat_layout(root, wts)
-    base = upstream if (flat and upstream) else cfg.get("main_branch", "main")
+    base = upstream if is_flat_layout(root, wts) and upstream else cfg.get("main_branch", "main")
     rows = feature_rows(root, wts, cfg, base)
-
-    print("")
-    print("项目根: %s" % root)
-    print("主干: %s    官方基线: %s    生态: %s" % (
-        cfg.get("main_branch"), upstream or "(未配置)", cfg.get("ecosystem")))
-    print("")
-    header = "%-18s %-16s %6s %7s %6s %8s %8s  %s" % (
-        "工作树", "分支", "ahead", "behind", "dirty", "改动文件", "HEAD", "最近提交")
-    print(header)
-    print("-" * 96)
+    print("\n项目根: %s\n主干: %s    官方基线: %s" % (root, cfg.get("main_branch"), upstream or "(未配置)"))
+    print("工作树               分支               角色          ahead behind dirty 未跟踪 改动文件 HEAD")
     for r in rows:
-        tag = " [main]" if r["folder"] == cfg.get("main_worktree") else ""
-        print("%-18s %-16s %6s %7s %6s %8s %8s  %s%s" % (
-            r["folder"], r["branch"], r["ahead"], r["behind"], r["dirty"],
-            r["files"], r["sha"], (r["subject"] or "")[:36], tag))
-    print("")
-    extra = [r for r in rows if r.get("untracked")]
-    if extra:
-        say("未跟踪文件（多为构建产物，不影响同步/归档）: "
-            + ", ".join("%s(+%d)" % (r["folder"], r["untracked"]) for r in extra))
-    stale = [r["folder"] for r in rows
-             if r["behind"] not in ("0", "?", None) and r["folder"] != cfg.get("main_worktree")]
+        print("%-20s %-18s %-10s %5s %6s %5s %6s %8s %s" %
+              (r["folder"], r["branch"], r["role"], r["ahead"], r["behind"], r["dirty"], r["untracked"], r["files"], r["sha"]))
+    stale = [r["folder"] for r in rows if r["role"] == "source" and r["behind"] not in ("0", "", "?") and r["branch"] != cfg.get("main_branch")]
     if stale:
         say("落后主干，需要同步: %s" % ", ".join(stale))
         say("一键执行: gwf sync %s" % " ".join(stale))
     else:
-        say("所有工作树均已对齐主干")
+        say("已关联的源码工作树均已对齐主干")
 
 
 def cmd_scan(args):
     root = project_root()
     cfg = get_config(root)
     base = cfg.get("main_branch", "main")
-    wts = [w for w in list_worktrees() if w["branch"] != base]
-    if not wts:
+    all_wts = list_worktrees()
+    wts = [w for w in all_wts if w["branch"] != base]
+    eligible = []
+    for w in wts:
+        category = role(root, cfg, w)
+        if category == "resource" or not related(w, base):
+            say("跳过 %s: %s" % (w["path"].name, "resource" if category == "resource" else "unrelated"))
+        else:
+            eligible.append(w)
+    if not eligible:
         say("没有特性工作树可扫描")
         return
-
-    changed = {}
-    for w in wts:
-        res = run(["diff", "--name-only", "%s..HEAD" % base], cwd=w["path"])
-        changed[w["path"].name] = set(l for l in res["out"].splitlines() if l.strip())
-
-    print("")
-    say("扫描 %d 个特性工作树（基线 %s）" % (len(wts), base))
-
+    changed = {worktree_label(root, w): changed_paths(w["path"], base) for w in eligible}
+    main = next((w for w in all_wts if w["branch"] == base), None)
+    main_label = None
+    if main:
+        main_changes = working_paths(main["path"])
+        if main_changes:
+            main_label = worktree_label(root, main)
+            changed[main_label] = main_changes
+            eligible.append(main)
+            say("主工作树存在未提交变更，纳入碰撞扫描")
+    say("扫描 %d 个源码工作树（已提交、暂存、未暂存和未跟踪；基线 %s）" % (len(eligible), base))
     hot = {}
     for name, files in changed.items():
+        ignored = git_paths(next(w["path"] for w in eligible if worktree_label(root, w) == name), ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"])
+        say("%s: %d 个变更路径；%d 个忽略路径（未纳入碰撞）" % (name, len(files), len(ignored)))
         for f in files:
             hot.setdefault(f, []).append(name)
     overlaps = {f: v for f, v in hot.items() if len(v) > 1}
-
-    empty = [n for n, v in changed.items() if not v]
-    if empty:
-        warn("尚无改动的工作树: %s" % ", ".join(sorted(empty)))
-
-    if not overlaps:
-        say("无文件重叠：并行分支互不影响")
-    else:
-        print("")
-        print("[冲突预警] %d 个文件被多个并行分支同时修改：" % len(overlaps))
+    if overlaps:
+        print("[冲突预警] %d 个路径被多个工作树修改：" % len(overlaps))
         for f, names in sorted(overlaps.items()):
-            print("  - %-52s <- %s" % (f, ", ".join(sorted(names))))
-        print("")
-        say("建议：先合入改动更基础的分支，再对另一个执行 gwf sync <folder>")
-
-    behind = []
-    for w in wts:
-        n = run(["rev-list", "--count", "HEAD..%s" % base], cwd=w["path"]).get("out", "0")
+            print("  - %r <- %s" % (f, ", ".join(sorted(names))))
+        if main_label and any(main_label in names for names in overlaps.values()):
+            say("请先处理主工作树的未提交变更，再安排分支合入")
+        else:
+            say("建议：先合入改动更基础的分支，再同步另一个")
+    else:
+        say("无文件重叠")
+    for w in eligible:
+        n = run(["rev-list", "--count", "HEAD.." + base], cwd=w["path"])["out"]
         if n not in ("0", ""):
-            behind.append((w["path"].name, n))
-    if behind:
-        print("")
-        say("落后主干（合入前必须先同步）：")
-        for name, n in behind:
-            print("  - %-18s 落后 %s 个提交" % (name, n))
+            say("%s 落后主干 %s 个提交" % (w["path"].name, n))
 
 
 # ---------------------------------------------------------------- sync
@@ -929,7 +1015,7 @@ def sync_one(root, cfg, target, args, base):
         die("%s 有未提交的已跟踪改动，先提交或 stash 再同步：\n%s"
             % (path.name, "\n".join(tracked[:10])))
     if untracked:
-        warn("%s 有 %d 个未跟踪文件（多为构建产物），本次忽略" % (path.name, len(untracked)))
+        warn("%s 有 %d 个未跟踪文件，请确认 rebase 不会覆盖，本次保留" % (path.name, len(untracked)))
 
     mb = run(["merge-base", base, "HEAD"], cwd=path).get("out", "")
     if not mb:
@@ -1065,6 +1151,23 @@ def cmd_sync(args):
         die("找不到主干工作树")
     base = cfg.get("main_branch", "main")
     up = cfg.get("upstream_ref", "")
+    # Validate every selected target before fetch, merge or backup.
+    validate_main(root, cfg, wts, main)
+    if flat:
+        selected = [main]
+    elif args.all:
+        for w in wts:
+            if w["branch"] != base and (role(root, cfg, w) == "resource" or not related(w, base)):
+                say("跳过 %s: %s" % (w["path"].name, "resource" if role(root, cfg, w) == "resource" else "unrelated"))
+        selected = [w for w in wts if w["branch"] != base and role(root, cfg, w) != "resource" and related(w, base)]
+        for w in selected:
+            registered_target(root, cfg, wts, os.path.relpath(w["path"], root))
+    else:
+        values = args.targets or [os.path.relpath(Path.cwd(), root)]
+        selected = [registered_target(root, cfg, wts, value) for value in values]
+        for w in selected:
+            if not related(w, base):
+                die("目标与主干无共同祖先: %s" % w["path"])
     # 扁平仓库或显式 --upstream：目标分支直接变基到官方引用，不经 main 中转
     onto_upstream = bool(up) and (flat or args.upstream)
 
@@ -1089,25 +1192,9 @@ def cmd_sync(args):
                 else:
                     say("保持现有主干继续；需要把主干也变基到官方时加 --rebase-main")
 
+    targets = [w["path"] for w in selected]
     if flat:
         say("直接同步到官方 %s（不经主干中转）" % up)
-        targets = [root]
-    elif args.all and not onto_upstream:
-        targets = [w["path"] for w in wts if w["branch"] != base]
-    elif args.targets:
-        targets = []
-        for t in args.targets:
-            cand = Path(root) / t
-            if cand.exists():
-                targets.append(cand)
-            elif Path(t).resolve().exists():
-                targets.append(Path(t).resolve())
-            else:
-                die("找不到工作树: %s" % t)
-    else:
-        if onto_upstream and not args.targets:
-            say("直接同步到官方 %s（不经主干中转）" % up)
-        targets = [Path.cwd()]
 
     results = {}
     for t in targets:
@@ -1131,6 +1218,53 @@ def cmd_sync(args):
 
 # ---------------------------------------------------------------- archive
 
+
+def read_regular_file(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        if not stat.S_ISREG(path.lstat().st_mode):
+            die("台账不是普通文件，拒绝归档: %s" % path)
+        fd = os.open(str(path), flags)
+        with os.fdopen(fd, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                die("台账不是普通文件，拒绝归档: %s" % path)
+            return source.read()
+    except OSError as exc:
+        die("无法读取台账 %s: %s" % (path, exc))
+
+
+def archive_ledger(target):
+    source = Path(target) / DOC_FILE
+    content = read_regular_file(source)
+    digest = hashlib.sha256(content).hexdigest()
+    directory = git_common_dir() / "gwf-archive"
+    try:
+        directory.mkdir(mode=0o700, exist_ok=True)
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
+            die("台账归档目录必须是私密普通目录: %s" % directory)
+        destination = directory / (digest + ".md")
+        try:
+            fd = os.open(str(destination), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            if read_regular_file(destination) != content:
+                die("台账归档哈希冲突或内容损坏: %s" % destination)
+        else:
+            try:
+                with os.fdopen(fd, "wb") as out:
+                    out.write(content)
+                    out.flush()
+                    os.fsync(out.fileno())
+            except OSError:
+                destination.unlink(missing_ok=True)
+                raise
+        if read_regular_file(destination) != content:
+            die("台账归档回读失败: %s" % destination)
+    except OSError as exc:
+        die("台账归档失败: %s" % exc)
+    say("台账已保全: %s (sha256 %s)" % (destination, digest))
+    return content
+
 def cmd_archive(args):
     root = project_root()
     cfg = get_config(root)
@@ -1138,29 +1272,38 @@ def cmd_archive(args):
     wts = list_worktrees()
     main = pick_main_worktree(root, wts, cfg)
 
-    target = (Path(root) / args.folder).resolve()
-    if not target.exists():
-        die("工作树不存在: %s" % args.folder)
-    if main and target == main["path"].resolve():
+    if not main:
+        die("找不到主干工作树")
+    validate_main(root, cfg, wts, main)
+    w = registered_target(root, cfg, wts, args.folder)
+    target = w["path"]
+    if target == main["path"]:
         die("不能归档主干工作树")
-
-    tracked, untracked = split_status(target)
+    if not related(w, base):
+        die("目标与主干无共同祖先，不能归档")
+    tracked, _ = split_status(target)
     if tracked and not args.force:
-        die("%s 有未提交的已跟踪改动，先提交/清理（或加 --force 丢弃）：\n%s"
-            % (args.folder, "\n".join(tracked[:10])))
+        die("%s 有未提交的已跟踪改动，先提交/清理（或加 --force 丢弃）" % args.folder)
+    untracked = git_paths(target, ["ls-files", "--others", "--exclude-standard", "-z"])
+    ignored = git_paths(target, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"])
+    ledger = DOC_FILE in untracked or DOC_FILE in ignored
+    untracked.discard(DOC_FILE)
+    ignored.discard(DOC_FILE)
     if untracked:
-        warn("%s 有 %d 个未跟踪文件（构建产物等），归档时一并删除" % (args.folder, len(untracked)))
-
-    branch = run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target).get("out", "")
+        die("%s 有未跟踪文件，归档前请先保全并清理" % args.folder)
+    if ignored and not args.force:
+        die("%s 有 %d 个忽略文件；归档前请保全并清理，或确认后加 --force 删除" % (args.folder, len(ignored)))
+    branch = w["branch"]
     if not branch:
         die("无法确定 %s 的分支名（可能处于 detached HEAD）" % args.folder)
 
     def is_merged():
         return run(["merge-base", "--is-ancestor", branch, base], cwd=main["path"])["code"] == 0
 
+    if not is_merged() and not args.merge:
+        die("分支 %s 尚未合入 %s。加 --merge 尝试快进合入，或先手动合并" % (branch, base))
+    ledger_content = archive_ledger(target) if ledger else None
     if not is_merged():
-        if not args.merge:
-            die("分支 %s 尚未合入 %s。加 --merge 尝试快进合入，或先手动合并" % (branch, base))
         say("合入 %s -> %s（仅允许快进）" % (branch, base))
         res = run(["merge", "--ff-only", branch], cwd=main["path"])
         if res["code"] != 0:
@@ -1177,10 +1320,16 @@ def cmd_archive(args):
     if not is_merged() and not args.force:
         die("分支 %s 仍未合入 %s，已中止（确需丢弃请加 --force）" % (branch, base))
 
+    ledger_path = target / DOC_FILE
+    if ledger_content is not None:
+        if read_regular_file(ledger_path) != ledger_content:
+            die("台账在归档后发生变化，已停止移除；请重新执行")
+        ledger_path.unlink()
     say("移除工作树 %s" % target)
-    need_force = args.force or bool(untracked)
-    res = run(["worktree", "remove", str(target)] + (["--force"] if need_force else []), cwd=main["path"])
+    res = run(["worktree", "remove", str(target)] + (["--force"] if args.force else []), cwd=main["path"])
     if res["code"] != 0:
+        if ledger_content is not None and target.exists() and not ledger_path.exists():
+            ledger_path.write_bytes(ledger_content)
         die("移除失败: %s" % (res["err"] or res["out"]))
     if not args.keep_branch:
         run(["branch", "-D" if args.force else "-d", branch], cwd=main["path"])
@@ -1268,10 +1417,21 @@ def cmd_backup(args):
 def cmd_config(args):
     root = project_root()
     cfg = load_config(root)
-    if args.action == "init" or not cfg:
+    if cfg is None and (Path(root) / CONFIG_FILE).exists():
+        die("配置无效，拒绝忽略已有的保护设置")
+    if cfg is not None and not isinstance(cfg, dict):
+        die("配置必须是 JSON 对象")
+    if args.action == "init":
+        existing = cfg or {}
         cfg = detect_config(root)
+        for key in ("protected_dirs", "resource_worktrees"):
+            if key in existing:
+                cfg[key] = existing[key]
         p = save_config(root, cfg)
         say("已生成配置: %s" % p)
+    elif cfg is None:
+        cfg = detect_config(root)
+        say("配置缺失：仅在内存中探测；使用 gwf config init 显式保存")
     else:
         say("当前配置: %s" % (Path(root) / CONFIG_FILE))
     print(json.dumps(cfg, ensure_ascii=False, indent=2))
@@ -1296,7 +1456,7 @@ def cmd_doctor(args):
         say("  扁平布局可直接同步官方: gwf sync（自动直连 %s）" % (cfg.get("upstream_ref") or "upstream"))
         say("  一键整改为纯 worktree 拓扑: gwf migrate")
     print("配置文件      : %s" % ("已就绪" if (Path(root) / CONFIG_FILE).exists() else "缺失"))
-    info = ensure_global_ignore()
+    info = ensure_global_ignore(write=args.repair)
     print("全局忽略文件  : %s%s" % (info["excludesfile"],
                                 "  (本次已写入规则)" if info["appended"] else ""))
     print("rerere        : %s" % ("已开启" if info["rerere"] else "未开启"))
@@ -1360,7 +1520,7 @@ def build_parser():
     sp.add_argument("--merge", action="store_true", help="未合入时尝试快进合入主干")
     sp.add_argument("--no-push", action="store_true", help="合入后不推送")
     sp.add_argument("--keep-branch", action="store_true", help="保留分支")
-    sp.add_argument("--force", action="store_true", help="忽略未提交改动/强制删除")
+    sp.add_argument("--force", action="store_true", help="确认后删除已跟踪改动及忽略文件；其他未跟踪文件仍拒绝")
     sp.set_defaults(func=cmd_archive)
 
     sp = sub.add_parser("backup", help="查看/核对/清理同步前自动创建的备份分支")
@@ -1374,7 +1534,9 @@ def build_parser():
     sp.add_argument("action", nargs="?", default="show", choices=["show", "init"])
     sp.set_defaults(func=cmd_config)
 
-    sub.add_parser("doctor", help="环境体检（多机器接入先跑这个）").set_defaults(func=cmd_doctor)
+    sp = sub.add_parser("doctor", help="只读环境体检；--repair 显式修复全局配置")
+    sp.add_argument("--repair", action="store_true", help="写入全局忽略和 rerere 设置")
+    sp.set_defaults(func=cmd_doctor)
     return p
 
 

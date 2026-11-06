@@ -1,6 +1,6 @@
 ---
 name: gwf-init
-description: 一键把一个仓库整理成"纯 Worktree 拓扑"（根目录只有 .git 和各分支目录），或迁移已有的普通仓库。用户说"初始化这个仓库/第一次拉这个 fork/帮我整理成 worktree 布局/加个远端"时使用。自动配置全局忽略 worktree.md、探测技术栈与验证命令、生成 .gwf.json。
+description: 一键把一个仓库整理成"纯 Worktree 拓扑"（根目录包含 Git 登记的工作树及配置的受保护普通目录），或迁移已有的普通仓库。用户说"初始化这个仓库/第一次拉这个 fork/帮我整理成 worktree 布局/加个远端"时使用。自动配置全局忽略 worktree.md、探测技术栈与验证命令、生成 .gwf.json。
 ---
 
 # gwf-init · 一键建仓 / 迁移 / 环境就绪
@@ -53,7 +53,7 @@ my-project/
 ```
 
 ## 验收清单
-- [ ] 根目录只有 `.git/`、`.gwf.json` 和分支目录（无散落源码）
+- [ ] 根目录包含 `.git/`、`.gwf.json`、可选 `AGENTS.md`、Git 登记的工作树及配置登记的受保护普通目录
 - [ ] `gwf doctor` 显示 `worktree.md` 与 `.gwf.json` `已被忽略 OK`
 - [ ] `gwf status` 能列出主干工作树，无报错
 - [ ] `.gwf.json` 的 `main_branch` / `upstream_ref` / `verify` 与项目实际一致；不一致就手改（这是唯一需要人工确认的地方）

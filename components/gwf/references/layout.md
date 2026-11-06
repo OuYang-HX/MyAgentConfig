@@ -11,7 +11,22 @@ my-project/
 └── feat-pay/        # 需求工作树 2
 ```
 
-根目录**只允许**出现 `.git/`、`.gwf.json` 和各分支目录。任何源码文件出现在根目录都算布局被污染。
+根目录可包含 `.git/`、`.gwf.json`、`AGENTS.md`、Git 登记的工作树，以及 `.gwf.json` 的 `protected_dirs` 登记的受保护普通目录。工作树由 Git 登记确认，不以目录名判断。
+
+## 受保护目录与资源工作树
+
+在 `.gwf.json` 中按实际情况配置相对容器根的路径：
+
+```json
+{
+  "protected_dirs": ["runtime"],
+  "resource_worktrees": ["data"]
+}
+```
+
+`protected_dirs` 是普通目录；`resource_worktrees` 必须对应 Git 已登记的工作树，不参与源码同步、归档或碰撞统计。无共同祖先的工作树也不会参与源码统计。配置须合并到已有配置，保留主干和远端设置。`gwf status`、`gwf scan`、`gwf doctor` 和 `gwf config` 仅读取；缺少配置时在内存探测，`gwf config init` 显式写配置，`gwf doctor --repair` 显式设置全局忽略与 rerere。
+
+扫描统计特性工作树的已提交差异、暂存、未暂存及未跟踪路径，并将主工作树的未提交路径纳入碰撞；忽略路径单独计数，不假定未跟踪文件是产物。归档时将根目录的 `worktree.md` 按 SHA-256 保存到 Git 公共管理区的私密 `gwf-archive/`，校验后清理；其他未跟踪文件必须先保全并清理。其他忽略文件默认也会阻止归档，`--force` 可在确认后移除它们和已跟踪改动。
 
 ## 为什么根目录保持 bare
 
@@ -56,7 +71,7 @@ cd existing-project
 git status --porcelain              # 必须干净
 git config core.bare true           # 根目录退化为仓库本体，不再是工作区
 git worktree add <主分支> <主分支>   # 重建工作区到 ./<主分支>/
-# 3) 把根目录剩余的未跟踪/被忽略内容搬进 ./<主分支>/，根目录只留 .git/、.gwf.json、各工作树
+# 3) 把根目录剩余的未跟踪/被忽略内容搬进 ./<主分支>/，保留 .git/、.gwf.json、各工作树及已登记的受保护目录
 ```
 
 迁移前务必确认：未提交改动已提交或 stash；`.gitignore` 未把源码忽略掉。

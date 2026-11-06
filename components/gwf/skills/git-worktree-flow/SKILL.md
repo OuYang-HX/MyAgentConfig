@@ -37,7 +37,7 @@ description: Git 纯 Worktree 多需求并行开发与 fork 上游同步的"技�
    确认原有功能没丢之后再删，绝不凭记忆判断。
 4. **重写而非拼贴**：上游结构变了，就以新结构为基底重写，不留死路径。
 5. **`worktree.md`、`.gwf.json` 与 `.notes/` 不进 git**：过程记录与草稿放工作树根目录 `.notes/`，任务状态写 `worktree.md`，均靠全局 `core.excludesfile` 排除。
-6. **根目录无代码**：只允许 `.git/`、`.gwf.json` 和各分支目录。
+6. **容器根布局**：保留 `.git/`、`.gwf.json`、`AGENTS.md`、Git 登记的工作树，以及 `.gwf.json` 中 `protected_dirs` 登记的受保护普通目录。
 7. **不擅自动门禁**：类型错误/lint/测试按仓库规则改代码，不加 disable、不改阈值。
 8. **脏工作树先问**：有未提交改动时先提交或 stash，绝不 reset 丢弃。
 
